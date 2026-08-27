@@ -25,6 +25,18 @@ Discord is the only way to sign in — no passwords anywhere. Guests can play ev
 
 Environment variables work too and win over the file: `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`, `BASE_URL`.
 
+## Deploying it (Railway)
+
+Railpack builds this straight from `package.json` — no config files needed — but **`package.json` has to sit at the repo root**. If you ever see *"Railpack could not determine how to build the app"* and the contents it analyzed are just a folder name, that's a nested directory: either move the project up a level, or set the service's **Root Directory** to that subfolder.
+
+Three things to set on the Railway service:
+
+1. **Attach a volume, or your data will vanish.** Accounts, word lists, saved drawings, the shared library and friends all live on disk under `data/`, and Railway's filesystem resets on every redeploy. Add a volume, then point `MIVI_DATA_DIR` at its mount path (e.g. `/data`).
+2. **`BASE_URL`** — your public URL, no trailing slash (e.g. `https://yourgame.up.railway.app`). Discord sign-in builds its redirect from this.
+3. **`DISCORD_CLIENT_ID` and `DISCORD_CLIENT_SECRET`** as service variables — `config.json` is gitignored, so it never ships. Then add `https://yourgame.up.railway.app/api/auth/discord/callback` to the redirects on your Discord app.
+
+`PORT` is injected by Railway and the server already honours it. Without the Discord variables the game still runs fine — sign-in just stays switched off and everyone plays as a guest.
+
 ## What's in it
 
 - **Play online** — drops you straight into a public game that's already going (or starts one if nobody's playing). Classic word list, rounds auto-start.
