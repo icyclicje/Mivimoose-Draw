@@ -62,47 +62,76 @@ function getWordChoicesWithSource(room, count, exclude = new Set()) {
     return (Number.isFinite(w) && w >= 1) ? Math.min(10, w) : 1;
   };
 
-  function pickList() {
-    const totalWeight = selected.reduce((s, n) => s + weightOf(n), 0);
-    let r = Math.random() * totalWeight;
-    for (const name of selected) {
-      r -= weightOf(name);
-      if (r <= 0) return name;
-    }
-    return selected[selected.length - 1];
-  }
+  const lower = w => String(w).toLowerCase();
+  const usedCount = room.wordUsedCount || {};
+  const usedLower = new Set(Object.keys(usedCount).map(lower));
+  const offered = room.wordOffered || new Set();
 
   function varietyWeight(word) {
-    const uses = (room.wordUsedCount && room.wordUsedCount[word]) || 0;
+    const uses = usedCount[word] || 0;
     if (uses === 0) return 4;
     if (uses === 1) return 2;
     return 1;
   }
 
-  function pickWordFromList(listName) {
-    const list = all[listName];
-    const totalW = list.reduce((s, w) => s + varietyWeight(w), 0);
-    let r = Math.random() * totalW;
-    for (const word of list) {
-      r -= varietyWeight(word);
-      if (r <= 0) return word;
-    }
-    return list[list.length - 1];
-  }
+  // Avoid-repeats tiers: never-seen words first, then words that were only
+  // offered (not drawn), then anything at all — so even a tiny list keeps
+  // filling the choices instead of stalling the round.
+  const tiers = (room.options && room.options.avoidRepeats)
+    ? [w => !usedLower.has(lower(w)) && !offered.has(lower(w)), w => !usedLower.has(lower(w)), () => true]
+    : [() => true];
 
   const result = [];
-  const used = new Set([...exclude].map(w => String(w).toLowerCase()));
-  let attempts = 0;
-  while (result.length < count && attempts < 400) {
-    attempts++;
-    const listName = pickList();
-    const word = pickWordFromList(listName);
-    if (!used.has(word.toLowerCase())) {
-      used.add(word.toLowerCase());
+  const taken = new Set([...exclude].map(lower));
+
+  for (const passes of tiers) {
+    if (result.length >= count) break;
+    // Per-list candidate pools for this tier.
+    const pools = {};
+    for (const name of selected) {
+      const c = all[name].filter(w => passes(w) && !taken.has(lower(w)));
+      if (c.length) pools[name] = c;
+    }
+    let guard = 0;
+    while (result.length < count && guard++ < 2000) {
+      const names = Object.keys(pools);
+      if (!names.length) break;
+      // Pick a list by weight (only lists that still have candidates)…
+      const totalWeight = names.reduce((s, n) => s + weightOf(n), 0);
+      let r = Math.random() * totalWeight;
+      let listName = names[names.length - 1];
+      for (const n of names) { r -= weightOf(n); if (r <= 0) { listName = n; break; } }
+      // …then a word from it, least-used first.
+      const pool = pools[listName];
+      const totalW = pool.reduce((s, w) => s + varietyWeight(w), 0);
+      let r2 = Math.random() * totalW;
+      let idx = pool.length - 1;
+      for (let i = 0; i < pool.length; i++) { r2 -= varietyWeight(pool[i]); if (r2 <= 0) { idx = i; break; } }
+      const word = pool[idx];
+      pool.splice(idx, 1);
+      if (!pool.length) delete pools[listName];
+      taken.add(lower(word));
       result.push({ word, listName });
     }
   }
   return result;
+}
+
+// How much of the selected word pool is still unused (for the lobby hint).
+function poolStats(room) {
+  const all = availableLists(room);
+  const used = new Set(Object.keys(room.wordUsedCount || {}).map(w => w.toLowerCase()));
+  const seen = new Set();
+  let unused = 0;
+  for (const name of room.selectedLists || []) {
+    for (const w of (all[name] || [])) {
+      const l = w.toLowerCase();
+      if (seen.has(l)) continue;
+      seen.add(l);
+      if (!used.has(l)) unused++;
+    }
+  }
+  return { total: seen.size, unused };
 }
 
 function getWordChoices(room, count, exclude = new Set()) {
@@ -138,6 +167,7 @@ module.exports = {
   getWordChoices,
   getWordChoicesWithSource,
   catalog,
+  poolStats,
   titleCase,
   CLASSIC_LIST,
 };

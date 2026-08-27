@@ -2,7 +2,11 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#6C5CE7" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-title" content="Mivimoose Draw" />
   <title>Mivimoose Draw</title>
   <meta name="description" content="Mivimoose Draw — a modern multiplayer drawing & guessing game. Play online, build word lists, save your art." />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -222,6 +226,7 @@ t-shirt</pre>
             <label class="toggle-row" data-help="coopMode"><input type="checkbox" id="opt-coopMode" class="switch" /><span>Co-op drawing<span class="toggle-hint">Two artists per round (3+ players)</span></span></label>
             <label class="toggle-row" data-help="textTool"><input type="checkbox" id="opt-textTool" class="switch" /><span>Text tool<span class="toggle-hint">Artists can type on the canvas</span></span></label>
             <label class="toggle-row" data-help="showWordSource"><input type="checkbox" id="opt-showWordSource" class="switch" /><span>Show word source<span class="toggle-hint">Reveal which list the word came from</span></span></label>
+            <label class="toggle-row" data-help="avoidRepeats"><input type="checkbox" id="opt-avoidRepeats" class="switch" checked /><span>Avoid repeats<span class="toggle-hint" id="avoid-hint">Words that already came up stay out of the rotation</span></span></label>
             <label class="toggle-row" data-help="spamProtection"><input type="checkbox" id="opt-spamProtection" class="switch" checked /><span>Spam protection<span class="toggle-hint">Mutes people who flood the chat</span></span></label>
           </div>
         </div>

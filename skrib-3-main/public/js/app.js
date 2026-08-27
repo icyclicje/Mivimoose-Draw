@@ -589,6 +589,11 @@
       renderWordLists(s.wordLists);
       syncOptions(s.options);
       renderMyLists();
+      if (s.wordPool) {
+        $('avoid-hint').textContent = s.options.avoidRepeats
+          ? `${s.wordPool.unused.toLocaleString()} of ${s.wordPool.total.toLocaleString()} words still unused in this room`
+          : 'Words that already came up stay out of the rotation';
+      }
     } else {
       renderReadonlyOptions(s);
     }
@@ -606,6 +611,7 @@
       ['Lists', s.wordLists.selected.length],
       ['Mode', o.combinations ? 'Combos' : o.coopMode ? 'Co-op' : o.hidden ? 'Hidden' : 'Classic'],
       ['Spam guard', o.spamProtection ? 'On' : 'Off'],
+      ['Repeats', o.avoidRepeats ? 'Avoided' : 'Allowed'],
     ];
     for (const [label, val] of items) {
       const item = el('div', 'ro-item');
@@ -742,7 +748,7 @@
   }
 
   const OPT_KEYS = ['rounds', 'roundTime', 'wordChoices', 'hintCount', 'maxPlayers', 'autocorrectStrength'];
-  const OPT_TOGGLES = ['combinations', 'lockComboParts', 'hidden', 'coopMode', 'showWordSource', 'spamProtection', 'textTool'];
+  const OPT_TOGGLES = ['combinations', 'lockComboParts', 'hidden', 'coopMode', 'showWordSource', 'spamProtection', 'textTool', 'avoidRepeats'];
 
   // Plain-language explanations shown when you tap the ? next to a setting.
   const HELP = {
@@ -758,6 +764,7 @@
     coopMode: 'Two people draw at the same time on the same canvas. Needs at least three players so someone is left to guess.',
     textTool: 'Lets artists type text onto the canvas with the T tool. Writing the actual word (or anything close to it) is blocked.',
     showWordSource: 'After each round, show which list the word came from.',
+    avoidRepeats: "Words that have already been drawn — or even shown as a choice — stay out of the rotation for this room, across games, until you change lists. Tiny lists can't get stuck: if the list runs dry, words that were only offered come back first, then ones that were drawn.",
     spamProtection: 'Anyone sending more than six messages in five seconds, or the same thing three times in a row, gets muted for ten seconds. Always on in public games.',
   };
 
@@ -1049,6 +1056,7 @@
     preview.height = CANVAS_H;
     clearCanvasLocal();
 
+    canvas.addEventListener('contextmenu', (e) => e.preventDefault()); // long-press on phones
     canvas.addEventListener('pointerdown', (e) => { canvas.setPointerCapture(e.pointerId); startDraw(e); });
     canvas.addEventListener('pointermove', draw);
     canvas.addEventListener('pointerup', endDraw);

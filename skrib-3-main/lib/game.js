@@ -75,6 +75,7 @@ function defaultOptions() {
     coopMode: false,
     spamProtection: true,     // per-player chat/guess flood + repeat guard
     textTool: false,          // lets artists type text onto the canvas
+    avoidRepeats: true,       // words that came up stay out (with graceful fallback)
   };
 }
 
@@ -243,6 +244,7 @@ function createRoom({ managed = false } = {}) {
     listWeights: {},
     customLists: {},
     wordUsedCount: {},
+    wordOffered: new Set(),   // lower-cased words shown as choices (avoid-repeats)
     autoStart: null,
     transitionTimer: null,
     emptySince: null,
@@ -294,6 +296,7 @@ function getRoomPublicState(room) {
       ? maskWithReveals(room.currentWord, room.revealedIndices) : null,
     hiddenMode: !!room.options.hidden,
     likeCount: room.roundLikes.size,
+    wordPool: room.state === 'lobby' ? words.poolStats(room) : null,
     wordLists: {
       available: words.catalog(room),
       selected: room.selectedLists,
@@ -540,7 +543,8 @@ function resendChoices(room, player, socket) {
 function beginGame(room) {
   room.round = 1;
   room.drawerIndex = 0;
-  room.wordUsedCount = {};
+  // Word history deliberately survives across games in the same room —
+  // it resets when the host changes lists or toggles "avoid repeats".
   room.players.forEach(p => { room.scores[p.key] = 0; });
   room.autoStart = null;
   startRound(room);
@@ -624,6 +628,7 @@ function startRound(room) {
     return;
   }
   room.wordChoices = withSource.map(w => w.word);
+  withSource.forEach(w => room.wordOffered.add(w.word.toLowerCase()));
   room.wordChoicesSources = {};
   withSource.forEach(({ word, listName }) => { room.wordChoicesSources[word] = listName; });
   room.state = 'choosing';
@@ -674,7 +679,9 @@ function autoPickWord(room) {
 
 function wordChosen(room, word) {
   room.currentWord = word;
-  room.wordUsedCount[word] = (room.wordUsedCount[word] || 0) + 1;
+  for (const part of word.split('+')) {
+    room.wordUsedCount[part] = (room.wordUsedCount[part] || 0) + 1;
+  }
   const wordParts = word.split('+');
   room.currentWordSource = room.wordChoicesSources[wordParts[0]] || null;
   room.currentWordSource2 = wordParts.length > 1 ? (room.wordChoicesSources[wordParts[1]] || null) : null;
@@ -843,7 +850,6 @@ function backToLobby(room) {
   room.drawerIndex = 0;
   room.coopPartnerIndex = null;
   room.currentWord = null;
-  room.wordUsedCount = {};
   room.players.forEach(p => { room.scores[p.key] = 0; });
   io.to(room.code).emit('backToLobby', getRoomPublicState(room));
 }
@@ -1096,7 +1102,12 @@ function init(_io) {
       if (room.managed || room.hostKey !== player.key || room.state !== 'lobby') return;
       const all = words.availableLists(room);
       const valid = Array.isArray(lists) ? lists.filter(l => all[l]) : [];
+      const before = JSON.stringify([...room.selectedLists].sort());
       room.selectedLists = valid.length > 0 ? valid : Object.keys(all);
+      if (JSON.stringify([...room.selectedLists].sort()) !== before) {
+        room.wordUsedCount = {};
+        room.wordOffered = new Set();
+      }
       room.listWeights = {};
       if (weights && typeof weights === 'object') {
         for (const [lname, w] of Object.entries(weights)) {
@@ -1179,6 +1190,11 @@ function init(_io) {
         if (options.hidden !== undefined) o.hidden = !!options.hidden;
         if (options.autocorrectStrength !== undefined) o.autocorrectStrength = clampInt(options.autocorrectStrength, 0, 3, 1);
         if (options.textTool !== undefined) o.textTool = !!options.textTool;
+        if (options.avoidRepeats !== undefined) {
+          const v = !!options.avoidRepeats;
+          if (v !== o.avoidRepeats) { room.wordUsedCount = {}; room.wordOffered = new Set(); }
+          o.avoidRepeats = v;
+        }
         if (options.lockComboParts !== undefined) o.lockComboParts = !!options.lockComboParts;
         if (options.coopMode !== undefined) o.coopMode = !!options.coopMode;
         if (options.spamProtection !== undefined) o.spamProtection = !!options.spamProtection;
@@ -1201,6 +1217,7 @@ function init(_io) {
           room.combinationPart1 = word;
           const p2 = words.getWordChoicesWithSource(room, room.options.wordChoices, new Set([word]));
           room.wordChoicesPart2 = p2.map(w => w.word);
+          p2.forEach(w => room.wordOffered.add(w.word.toLowerCase()));
           p2.forEach(({ word: w, listName }) => { room.wordChoicesSources[w] = listName; });
           const recipient = (room.options.coopMode && partner) ? partner : drawer;
           const coopPart2 = !!(room.options.coopMode && partner);

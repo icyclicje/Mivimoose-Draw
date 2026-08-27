@@ -145,7 +145,7 @@ async function main() {
     check('only the Classic list ships', created.state.wordLists.available.filter(l => !l.custom).length === 1 && created.state.wordLists.available[0].label === 'Classic');
     const dflt = created.state.options;
     check('new defaults (10 rounds · 90s · 5 words · 5 hints · 10 players · easy)',
-      dflt.rounds === 10 && dflt.roundTime === 90 && dflt.wordChoices === 5 && dflt.hintCount === 5 && dflt.maxPlayers === 10 && dflt.autocorrectStrength === 1 && dflt.textTool === false,
+      dflt.rounds === 10 && dflt.roundTime === 90 && dflt.wordChoices === 5 && dflt.hintCount === 5 && dflt.maxPlayers === 10 && dflt.autocorrectStrength === 1 && dflt.textTool === false && dflt.avoidRepeats === true,
       JSON.stringify(dflt));
     const code = created.code;
 
@@ -236,6 +236,7 @@ async function main() {
     const nextRound = await once(B, 'roundStart', 10000);
     check('rotation: guesser now draws', nextRound.drawerId === (joined.state.players[1].id));
     const wcB = await wcBP;
+    check('avoid repeats: drawn word is not offered again', !wcB.words.includes(wc.words[0]), JSON.stringify(wcB.words));
     const geA = once(A, 'gameEnd', 40000);
     B.emit('chooseWord', { word: wcB.words[0] });
     // Nobody guesses; round time is 30s — vote-skip instead to keep the test fast.
@@ -480,6 +481,35 @@ async function main() {
     const batch = await batchP;
     check('draw batches relayed', Array.isArray(batch) && batch.length === 2);
     HOST.disconnect(); FR.disconnect();
+
+    // ═══ 7e. Avoid repeats never strands a tiny list ═══
+    console.log('— avoid repeats —');
+    const H4 = connect({ guestKey: '7'.repeat(32), name: 'Tiny' });
+    await once(H4, 'welcome');
+    p = once(H4, 'roomCreated'); H4.emit('createRoom', { name: 'Tiny' }); const room4 = (await p).code;
+    const G4 = connect({ guestKey: '8'.repeat(32), name: 'Guessy' });
+    await once(G4, 'welcome');
+    p = once(G4, 'roomJoined'); G4.emit('joinRoom', { code: room4 }); await p;
+    p = once(H4, 'customListAdded'); H4.emit('addCustomList', { name: 'tiny', text: 'apple\nbanana\ncherry' }); await p;
+    H4.emit('setWordLists', { lists: ['tiny'], weights: {} });
+    p = once(H4, 'stateUpdate');
+    H4.emit('setGameOptions', { options: { rounds: 2, roundTime: 30, autocorrectStrength: 0 } });
+    const st4 = await p;
+    check('lobby reports the unused pool', st4.wordPool && st4.wordPool.total === 3 && st4.wordPool.unused === 3, JSON.stringify(st4.wordPool));
+    const wc4a = once(H4, 'wordChoices');
+    const wc4bP = once(G4, 'wordChoices', 20000);
+    H4.emit('startGame');
+    const first = (await wc4a).words;
+    check('tiny list still offers choices', first.length === 3, JSON.stringify(first));
+    const ds4 = once(G4, 'drawingStart');
+    H4.emit('chooseWord', { word: first[0] });
+    await ds4;
+    G4.emit('guess', { text: first[0] });
+    const second = (await wc4bP).words;
+    const others = first.filter(w => w !== first[0]);
+    check('round 2 still gets a full set from a 3-word list', second.length === 3, JSON.stringify(second));
+    check('unused words come back before the drawn one', others.every(w => second.includes(w)) && second.filter(w => w === first[0]).length === 1, JSON.stringify(second));
+    H4.disconnect(); G4.disconnect();
 
     // ═══ 8. Combo lock: full answer accepted after locking a part ═══
     console.log('— combo lock —');
