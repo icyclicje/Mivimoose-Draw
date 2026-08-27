@@ -1,0 +1,544 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Mivimoose Draw</title>
+  <meta name="description" content="Mivimoose Draw — a modern multiplayer drawing & guessing game. Play online, build word lists, save your art." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/css/style.css" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%236C5CE7'/%3E%3Crect x='24' y='24' width='16' height='22' rx='8' fill='white'/%3E%3Crect x='21' y='36' width='22' height='12' rx='6' fill='white'/%3E%3Ccircle cx='28' cy='31' r='2' fill='%236C5CE7'/%3E%3Ccircle cx='36' cy='31' r='2' fill='%236C5CE7'/%3E%3Ccircle cx='28' cy='42' r='1.6' fill='%236C5CE7'/%3E%3Ccircle cx='36' cy='42' r='1.6' fill='%236C5CE7'/%3E%3Crect x='8' y='10' width='14' height='5' rx='2.5' fill='white' transform='rotate(-12 15 12)'/%3E%3Crect x='42' y='10' width='14' height='5' rx='2.5' fill='white' transform='rotate(12 49 12)'/%3E%3Crect x='9' y='3' width='4.5' height='12' rx='2.25' fill='white'/%3E%3Crect x='15' y='1' width='4.5' height='14' rx='2.25' fill='white'/%3E%3Crect x='50.5' y='3' width='4.5' height='12' rx='2.25' fill='white'/%3E%3Crect x='44.5' y='1' width='4.5' height='14' rx='2.25' fill='white'/%3E%3C/svg%3E" />
+</head>
+<body>
+
+<svg width="0" height="0" style="position:absolute">
+  <defs>
+    <linearGradient id="miviGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#6C5CE7"/>
+      <stop offset="100%" stop-color="#FD79A8"/>
+    </linearGradient>
+  </defs>
+</svg>
+
+<header class="topbar">
+  <button class="brand" id="brand-home" title="Home">
+    <span class="brand-mark">
+      <svg viewBox="0 0 64 64" aria-hidden="true">
+        <rect width="64" height="64" rx="16" fill="url(#miviGrad)"/>
+        <g fill="#ffffff">
+          <rect x="8" y="10" width="15" height="5" rx="2.5" transform="rotate(-14 15 12)"/>
+          <rect x="9"  y="3" width="4.6" height="12" rx="2.3"/>
+          <rect x="15.4" y="1" width="4.6" height="14" rx="2.3"/>
+          <rect x="41" y="10" width="15" height="5" rx="2.5" transform="rotate(14 49 12)"/>
+          <rect x="50.4" y="3" width="4.6" height="12" rx="2.3"/>
+          <rect x="44" y="1" width="4.6" height="14" rx="2.3"/>
+          <rect x="18" y="20" width="9" height="6" rx="3" transform="rotate(-24 22 23)"/>
+          <rect x="37" y="20" width="9" height="6" rx="3" transform="rotate(24 42 23)"/>
+          <rect x="24" y="22" width="16" height="24" rx="8"/>
+          <rect x="20.5" y="35" width="23" height="13" rx="6.5"/>
+        </g>
+        <circle cx="28.5" cy="30.5" r="2" fill="#6C5CE7"/>
+        <circle cx="35.5" cy="30.5" r="2" fill="#6C5CE7"/>
+        <circle cx="27.5" cy="41.5" r="1.7" fill="#B9B3F5"/>
+        <circle cx="36.5" cy="41.5" r="1.7" fill="#B9B3F5"/>
+        <g transform="rotate(38 50 50)">
+          <rect x="48" y="44" width="5" height="15" rx="2.5" fill="#2D2A55"/>
+          <rect x="48" y="41" width="5" height="3.4" rx="1" fill="#FDCB6E"/>
+          <path d="M48.5 41 L50.5 34 L52.5 41 Z" fill="#FD79A8"/>
+        </g>
+      </svg>
+    </span>
+    <span class="brand-text">Mivimoose<span class="brand-chip">DRAW</span></span>
+  </button>
+
+  <div class="topbar-mid">
+    <div class="room-pill" id="room-pill" style="display:none">
+      <span class="room-pill-code" id="room-pill-code">····</span>
+      <button class="room-pill-btn" id="btn-invite-top" title="Copy invite link">🔗</button>
+    </div>
+  </div>
+
+  <div class="topbar-actions">
+    <button class="icon-btn" id="btn-music" title="Music on/off">🎵</button>
+    <button class="icon-btn" id="btn-theme" title="Light / dark theme">🌙</button>
+    <button class="icon-btn" id="btn-settings" title="Settings">⚙️</button>
+    <button class="account-chip" id="account-chip">
+      <span class="account-chip-avatar" id="account-chip-avatar">👤</span>
+      <span id="account-chip-name">Sign in</span>
+    </button>
+  </div>
+</header>
+
+<main id="main">
+
+  <!-- ══════════ HOME ══════════ -->
+  <section id="screen-home" class="screen active">
+    <div class="hero">
+      <h1 class="hero-title">Draw stuff. <span class="hero-grad">Guess stuff.</span></h1>
+      <p class="hero-sub">One of you scribbles, everyone else yells guesses. That's it, that's the game.</p>
+    </div>
+
+    <div class="home-grid">
+      <div class="card identity-card">
+        <div class="card-title">First, pick a name</div>
+        <div class="identity-row">
+          <button class="avatar-bubble" id="avatar-bubble" title="Pick your avatar">🎨</button>
+          <input type="text" id="home-name" class="input" placeholder="Your nickname" maxlength="20" autocomplete="off" />
+        </div>
+        <div class="avatar-picker" id="avatar-picker" style="display:none">
+          <div class="avatar-emojis" id="avatar-emojis"></div>
+          <div class="avatar-colors" id="avatar-colors"></div>
+        </div>
+        <div class="home-error" id="home-error"></div>
+      </div>
+
+      <div class="card play-card">
+        <button class="btn btn-hero" id="btn-quickplay">
+          <span class="btn-hero-icon">🌍</span>
+          <span>
+            <span class="btn-hero-label">Play online</span>
+            <span class="btn-hero-sub">Drops you into a game that's already going</span>
+          </span>
+        </button>
+        <div class="play-split">
+          <button class="btn btn-big btn-alt" id="btn-create">✨ Make a room</button>
+          <div class="join-combo">
+            <input type="text" id="home-code" class="input input-code" placeholder="CODE" maxlength="6" autocomplete="off" />
+            <button class="btn btn-big" id="btn-join">Join</button>
+          </div>
+        </div>
+        <button class="btn btn-big btn-alt btn-library" id="btn-library">📚 List library <span class="btn-library-sub">grab word lists other people made, or share your own</span></button>
+      </div>
+
+      <div class="card rooms-card">
+        <div class="card-title-row">
+          <div class="card-title">🌐 Open rooms</div>
+          <button class="mini-btn" id="btn-refresh-rooms">↻ Refresh</button>
+        </div>
+        <div class="rooms-list" id="rooms-list">
+          <div class="rooms-empty">Nobody's hosting right now. Hit Play online and you'll be the one starting it.</div>
+        </div>
+      </div>
+    </div>
+
+    <p class="home-foot">Signing in with Discord keeps your word lists, drawings and stats around. Guests can still play everything.</p>
+  </section>
+
+  <!-- ══════════ LOBBY ══════════ -->
+  <section id="screen-lobby" class="screen">
+    <div class="lobby-grid">
+      <div class="lobby-left">
+        <div class="card room-card">
+          <div class="card-title">Room code</div>
+          <button class="room-code" id="lobby-code" title="Click to copy">····</button>
+          <div class="room-actions">
+            <button class="btn btn-small btn-alt" id="btn-copy-code">📋 Copy code</button>
+            <button class="btn btn-small" id="btn-copy-invite">🔗 Invite link</button>
+          </div>
+          <button class="btn btn-small btn-alt btn-wide" id="btn-lobby-friends" style="display:none">👥 Invite friends</button>
+          <label class="toggle-row" id="public-toggle-row" style="display:none">
+            <input type="checkbox" id="toggle-public" class="switch" />
+            <span>List publicly<span class="toggle-hint">Anyone can find &amp; join this room</span></span>
+          </label>
+          <div class="autostart-banner" id="autostart-banner" style="display:none"></div>
+        </div>
+
+        <div class="card players-card-lobby">
+          <div class="card-title-row">
+            <div class="card-title">Players</div>
+            <span class="pill" id="lobby-count">0/8</span>
+          </div>
+          <div class="lobby-players" id="lobby-players"></div>
+        </div>
+
+        <div class="card chat-card-lobby">
+          <div class="card-title">💬 Chat</div>
+          <div class="chat-scroll" id="lobby-chat"></div>
+          <div class="chat-input-row">
+            <input type="text" id="lobby-chat-input" class="input" placeholder="Say hi..." maxlength="120" />
+            <button class="send-btn" id="lobby-chat-send">➤</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="lobby-right">
+        <div class="card" id="words-panel" style="display:none">
+          <div class="card-title-row">
+            <div class="card-title">📚 Word lists</div>
+            <span class="mini-btn-row">
+              <button class="mini-btn" id="btn-lobby-library">📚 Library</button>
+              <button class="mini-btn" id="btn-list-odds">ℹ️ Odds</button>
+            </span>
+          </div>
+          <p class="card-hint">Tick the lists you want in play. Crank a list's weight if you want to see it more often.</p>
+          <div class="list-odds" id="list-odds" style="display:none"></div>
+          <div class="wl-grid" id="wl-grid"></div>
+          <div class="wl-custom">
+            <div class="wl-custom-title">Add your own list</div>
+            <details class="format-tip">
+            <summary>How to write a list</summary>
+            <div class="format-tip-body">
+              <p>One entry per line (commas work too). Keep each one short and drawable — a thing, an animal, an action, a place.</p>
+              <pre>ice cream
+traffic light
+sleeping
+t-shirt</pre>
+              <p>Capitalization and accents don't matter, duplicates get dropped automatically, and up to three words per entry is about the sweet spot.</p>
+            </div>
+          </details>
+            <div class="wl-custom-row">
+              <input type="text" id="cl-name" class="input" placeholder="List name" maxlength="40" />
+            </div>
+            <textarea id="cl-words" class="input textarea" rows="3" placeholder="One word per line, or commas between them — whatever's easier"></textarea>
+            <div class="wl-custom-row">
+              <button class="btn btn-small btn-alt" id="btn-add-list">➕ Add list</button>
+              <button class="btn btn-small btn-alt" id="btn-import-list">📂 Import .txt</button>
+              <input type="file" id="import-file" accept=".txt" multiple style="display:none" />
+              <span class="wl-mylists" id="wl-mylists" style="display:none">
+                <select id="mylists-select" class="input select"></select>
+                <button class="btn btn-small" id="btn-attach-list">Use</button>
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <div class="card" id="options-panel" style="display:none">
+          <div class="card-title">🎛️ Game options</div>
+          <p class="card-hint">Tap the <b>?</b> next to any setting for what it does.</p>
+          <div class="opt-grid">
+            <div class="opt" data-help="rounds"><label>Rounds</label><input type="range" id="opt-rounds" min="1" max="10" value="10" /><span class="opt-val" id="opt-rounds-val">10</span></div>
+            <div class="opt" data-help="roundTime"><label>Draw time</label><input type="range" id="opt-roundTime" min="30" max="240" step="10" value="90" /><span class="opt-val" id="opt-roundTime-val">90s</span></div>
+            <div class="opt" data-help="wordChoices"><label>Word choices</label><input type="range" id="opt-wordChoices" min="2" max="6" value="5" /><span class="opt-val" id="opt-wordChoices-val">5</span></div>
+            <div class="opt" data-help="hintCount"><label>Hints</label><input type="range" id="opt-hintCount" min="0" max="5" value="5" /><span class="opt-val" id="opt-hintCount-val">5</span></div>
+            <div class="opt" data-help="maxPlayers"><label>Max players</label><input type="range" id="opt-maxPlayers" min="2" max="20" value="10" /><span class="opt-val" id="opt-maxPlayers-val">10</span></div>
+            <div class="opt" data-help="autocorrectStrength"><label>Autocorrect</label><input type="range" id="opt-autocorrectStrength" min="0" max="3" value="1" /><span class="opt-val" id="opt-autocorrectStrength-val">Easy</span></div>
+          </div>
+          <div class="opt-toggles">
+            <label class="toggle-row" data-help="combinations"><input type="checkbox" id="opt-combinations" class="switch" /><span>Combinations<span class="toggle-hint">Draw two words at once</span></span></label>
+            <label class="toggle-row" data-help="lockComboParts"><input type="checkbox" id="opt-lockComboParts" class="switch" checked /><span>Lock combo parts<span class="toggle-hint">Needs Combinations on</span></span></label>
+            <label class="toggle-row" data-help="hidden"><input type="checkbox" id="opt-hidden" class="switch" /><span>Hidden mode<span class="toggle-hint">No hints or letter counts</span></span></label>
+            <label class="toggle-row" data-help="coopMode"><input type="checkbox" id="opt-coopMode" class="switch" /><span>Co-op drawing<span class="toggle-hint">Two artists per round (3+ players)</span></span></label>
+            <label class="toggle-row" data-help="textTool"><input type="checkbox" id="opt-textTool" class="switch" /><span>Text tool<span class="toggle-hint">Artists can type on the canvas</span></span></label>
+            <label class="toggle-row" data-help="showWordSource"><input type="checkbox" id="opt-showWordSource" class="switch" /><span>Show word source<span class="toggle-hint">Reveal which list the word came from</span></span></label>
+            <label class="toggle-row" data-help="spamProtection"><input type="checkbox" id="opt-spamProtection" class="switch" checked /><span>Spam protection<span class="toggle-hint">Mutes people who flood the chat</span></span></label>
+          </div>
+        </div>
+
+        <div class="card options-readonly" id="options-readonly" style="display:none">
+          <div class="card-title">🎛️ Game setup</div>
+          <div class="ro-grid" id="options-readonly-grid"></div>
+        </div>
+
+        <button class="btn btn-hero btn-start" id="btn-start" style="display:none">🚀 Start Game</button>
+        <p class="waiting-msg" id="waiting-msg">Waiting for the host to start…</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══════════ GAME ══════════ -->
+  <section id="screen-game" class="screen">
+    <div class="game-top card" id="game-top">
+      <div class="round-pill" id="round-pill">Round 1/3</div>
+      <div class="word-wrap">
+        <div class="word-tiles" id="word-tiles"></div>
+        <div class="word-meta" id="word-meta"></div>
+      </div>
+      <div class="timer-wrap" id="timer-wrap">
+        <svg viewBox="0 0 44 44" class="timer-ring">
+          <circle class="timer-ring-bg" cx="22" cy="22" r="19"></circle>
+          <circle class="timer-ring-fg" id="timer-ring-fg" cx="22" cy="22" r="19"></circle>
+        </svg>
+        <span class="timer-num" id="timer-num">–</span>
+      </div>
+    </div>
+
+    <div class="game-grid" id="game-grid">
+      <aside class="card players-card" id="players-card">
+        <div class="card-title-row"><div class="card-title">Players</div></div>
+        <div class="players-list" id="players-list"></div>
+      </aside>
+
+      <div class="canvas-card card" id="canvas-card">
+        <div class="canvas-frame" id="canvas-frame">
+          <canvas id="canvas"></canvas>
+          <canvas id="canvas-preview"></canvas>
+
+          <div class="canvas-overlay" id="overlay-wait">
+            <div class="overlay-emoji">⏳</div>
+            <h2 id="overlay-wait-title">Hang tight</h2>
+            <p id="overlay-wait-sub">Next round's coming right up…</p>
+          </div>
+
+          <div class="canvas-overlay" id="overlay-choosing" style="display:none">
+            <div class="overlay-emoji wiggle">🖌️</div>
+            <h2 id="choosing-name">Someone</h2>
+            <p>is choosing a word…</p>
+          </div>
+
+          <div class="canvas-overlay" id="overlay-choice" style="display:none">
+            <h2 id="choice-title">Choose a word to draw!</h2>
+            <div class="word-choice-grid" id="choice-grid"></div>
+          </div>
+
+          <button class="float-btn float-fullscreen" id="btn-fullscreen" title="Fullscreen drawing (F)">⛶</button>
+          <div class="float-actions" id="float-actions">
+            <button class="float-btn" id="btn-like" title="Like this drawing">❤️<span id="like-count"></span></button>
+            <button class="float-btn" id="btn-voteskip" title="Vote to skip this round">⏭️<span id="skip-count"></span></button>
+          </div>
+        </div>
+
+        <div class="toolbar" id="toolbar" style="display:none">
+          <div class="tool-group">
+            <button class="tool-btn active" data-tool="pen" title="Pen (B)">✏️</button>
+            <button class="tool-btn" data-tool="eraser" title="Eraser (E)">🧽</button>
+            <button class="tool-btn" data-tool="fill" title="Fill (G)">🪣</button>
+            <button class="tool-btn" data-tool="line" title="Line (L)">╱</button>
+            <button class="tool-btn" data-tool="rect" title="Rectangle (R)">▭</button>
+            <button class="tool-btn" data-tool="circle" title="Ellipse (C)">◯</button>
+            <button class="tool-btn" data-tool="triangle" title="Triangle (T)">△</button>
+            <button class="tool-btn tool-text" data-tool="text" id="tool-text" title="Text (X)" style="display:none">T</button>
+          </div>
+          <div class="tool-sep"></div>
+          <div class="size-dots" id="size-dots"></div>
+          <div class="tool-sep"></div>
+          <div class="palette" id="palette"></div>
+          <div class="tool-sep"></div>
+          <div class="tool-group">
+            <button class="tool-btn" id="btn-undo" title="Undo (Ctrl+Z)">↩️</button>
+            <button class="tool-btn" id="btn-clear" title="Clear all">🗑️</button>
+          </div>
+        </div>
+      </div>
+
+      <aside class="card chat-card" id="chat-card">
+        <div class="card-title-row chat-head">
+          <div class="card-title">💬 Guess &amp; chat</div>
+          <button class="mini-btn chat-close" id="btn-chat-close">✕</button>
+        </div>
+        <div class="chat-scroll" id="game-chat"></div>
+        <div class="chat-input-row">
+          <input type="text" id="game-chat-input" class="input" placeholder="Type your guess…" maxlength="100" />
+          <button class="send-btn" id="game-chat-send">➤</button>
+        </div>
+      </aside>
+    </div>
+
+    <button class="float-btn float-chat-toggle" id="btn-chat-toggle" title="Chat">💬<span class="chat-badge" id="chat-badge" style="display:none"></span></button>
+  </section>
+</main>
+
+<!-- ══════════ OVERLAYS ══════════ -->
+
+<div class="modal-backdrop" id="overlay-roundend" style="display:none">
+  <div class="modal round-end">
+    <h2 id="re-title">Round over!</h2>
+    <div class="re-word" id="re-word"></div>
+    <div class="re-body">
+      <img class="re-image" id="re-image" alt="The drawing" />
+      <div class="re-side">
+        <div class="re-stats" id="re-stats"></div>
+        <div class="re-actions">
+          <button class="btn btn-small" id="btn-re-like">❤️ <span id="re-like-count">0</span></button>
+          <button class="btn btn-small btn-alt" id="btn-re-download">⬇️ Download</button>
+          <button class="btn btn-small btn-alt" id="btn-re-save" style="display:none">💾 Save to gallery</button>
+        </div>
+        <div class="re-scores" id="re-scores"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="overlay-gameend" style="display:none">
+  <div class="modal game-end">
+    <h2>🏆 Final standings</h2>
+    <div class="podium" id="podium"></div>
+    <div class="final-list" id="final-list"></div>
+    <p class="ge-countdown">Back to the lobby in <span id="ge-count">12</span>s…</p>
+    <button class="btn btn-small" id="btn-skip-lobby" style="display:none">⏭️ Back to lobby now</button>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="modal-auth" style="display:none">
+  <div class="modal modal-sm">
+    <button class="modal-x" data-close="modal-auth">✕</button>
+    <h2 id="auth-title">Sign in</h2>
+    <p class="modal-sub" id="auth-sub">Your lists, drawings and stats follow your Discord account.</p>
+    <div class="form" id="auth-discord-form">
+      <button class="btn btn-big btn-discord" id="btn-auth-discord">
+        <svg viewBox="0 0 127 96" width="22" height="17" fill="currentColor" aria-hidden="true"><path d="M107.7 8.07A105.15 105.15 0 0 0 81.47 0a72.06 72.06 0 0 0-3.36 6.83 97.68 97.68 0 0 0-29.11 0A72.37 72.37 0 0 0 45.64 0a105.89 105.89 0 0 0-26.25 8.09C2.79 32.65-1.71 56.6.54 80.21a105.73 105.73 0 0 0 32.17 16.15 77.7 77.7 0 0 0 6.89-11.11 68.42 68.42 0 0 1-10.85-5.18c.91-.66 1.8-1.34 2.66-2a75.57 75.57 0 0 0 64.32 0c.87.71 1.76 1.39 2.66 2a68.68 68.68 0 0 1-10.87 5.19 77 77 0 0 0 6.89 11.1 105.25 105.25 0 0 0 32.19-16.14c2.64-27.38-4.51-51.11-18.9-72.15ZM42.45 65.69C36.18 65.69 31 60 31 53s5-12.74 11.43-12.74S54 46 53.89 53s-5.05 12.69-11.44 12.69Zm42.24 0C78.41 65.69 73.25 60 73.25 53s5-12.74 11.44-12.74S96.23 46 96.12 53s-5.04 12.69-11.43 12.69Z"/></svg>
+        Continue with Discord
+      </button>
+      <p class="toggle-hint" style="text-align:center">That's the only sign-in here — no passwords to forget.</p>
+    </div>
+    <div class="form" id="auth-unconfigured" style="display:none">
+      <p class="auth-note">This server isn't hooked up to Discord yet, so sign-in is off. If you run the server, the README shows how to connect it (takes about two minutes). Playing as a guest works fine in the meantime.</p>
+    </div>
+    <div class="form-error" id="auth-error"></div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="modal-library" style="display:none">
+  <div class="modal modal-lg">
+    <button class="modal-x" data-close="modal-library">✕</button>
+    <h2>📚 List library</h2>
+    <p class="modal-sub">Word lists shared by other players. Take what you like, leave something good behind.</p>
+    <div class="tabs" id="lib-tabs">
+      <button class="tab active" data-libtab="browse">Browse</button>
+      <button class="tab" data-libtab="upload">Share a list</button>
+    </div>
+    <div class="tab-pane active" id="libtab-browse">
+      <div class="lists-rows" id="lib-rows"></div>
+      <p class="gallery-empty" id="lib-empty" style="display:none">Nothing in here yet. Someone has to go first — might as well be you.</p>
+    </div>
+    <div class="tab-pane" id="libtab-upload">
+      <div class="form" id="lib-upload-form">
+        <input type="text" id="lib-name" class="input" placeholder="List name" maxlength="40" />
+        <input type="text" id="lib-author" class="input" placeholder="Your name (shown next to the list)" maxlength="20" />
+        <textarea id="lib-words" class="input textarea" rows="7" placeholder="One word per line, or commas between them"></textarea>
+        <details class="format-tip">
+            <summary>How to write a list</summary>
+            <div class="format-tip-body">
+              <p>One entry per line (commas work too). Keep each one short and drawable — a thing, an animal, an action, a place.</p>
+              <pre>ice cream
+traffic light
+sleeping
+t-shirt</pre>
+              <p>Capitalization and accents don't matter, duplicates get dropped automatically, and up to three words per entry is about the sweet spot.</p>
+            </div>
+          </details>
+        <div class="le-row">
+          <span class="le-count" id="lib-count">0 words</span>
+          <button class="btn btn-small btn-alt" id="btn-lib-import">📂 Import .txt</button>
+          <input type="file" id="lib-file" accept=".txt" style="display:none" />
+          <button class="btn btn-small" id="btn-lib-upload">⬆️ Share it</button>
+        </div>
+        <p class="toggle-hint">Swear protection runs on everything shared here — rude words get quietly dropped before anyone sees them.</p>
+        <div class="form-error" id="lib-error"></div>
+      </div>
+      <div class="form" id="lib-need-login" style="display:none">
+        <p class="auth-note">Sharing to the library needs an account, so every list has a real name on it. Sign in with Discord and you're good.</p>
+        <button class="btn btn-big" id="btn-lib-signin">Sign in to share</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="modal-account" style="display:none">
+  <div class="modal modal-lg">
+    <button class="modal-x" data-close="modal-account">✕</button>
+    <div class="acct-head">
+      <span class="acct-avatar" id="acct-avatar">🦌</span>
+      <div>
+        <h2 id="acct-name">You</h2>
+        <p class="modal-sub" id="acct-since"></p>
+      </div>
+      <button class="btn btn-small btn-alt acct-signout" id="btn-signout">Sign out</button>
+    </div>
+    <div class="tabs">
+      <button class="tab active" data-tab="profile">Profile</button>
+      <button class="tab" data-tab="lists">My lists</button>
+      <button class="tab" data-tab="gallery">Gallery</button>
+      <button class="tab" data-tab="friends">Friends</button>
+    </div>
+
+    <div class="tab-pane active" id="tab-profile">
+      <div class="stats-grid" id="stats-grid"></div>
+      <label class="toggle-row"><input type="checkbox" id="acct-autosave" class="switch" checked /><span>Auto-save my drawings<span class="toggle-hint">Every round you draw lands in your gallery</span></span></label>
+    </div>
+
+    <div class="tab-pane" id="tab-lists">
+      <div class="lists-toolbar">
+        <button class="btn btn-small" id="btn-new-list">➕ New list</button>
+        <button class="btn btn-small btn-alt" id="btn-import-acct-list">📂 Import .txt</button>
+        <input type="file" id="acct-import-file" accept=".txt" multiple style="display:none" />
+        <span class="lists-note">As many words as you like — export whenever</span>
+      </div>
+      <div class="lists-rows" id="lists-rows"></div>
+      <div class="list-editor" id="list-editor" style="display:none">
+        <input type="text" id="le-name" class="input" placeholder="List name" maxlength="40" />
+        <textarea id="le-words" class="input textarea" rows="8" placeholder="One word per line…"></textarea>
+        <details class="format-tip">
+            <summary>How to write a list</summary>
+            <div class="format-tip-body">
+              <p>One entry per line (commas work too). Keep each one short and drawable — a thing, an animal, an action, a place.</p>
+              <pre>ice cream
+traffic light
+sleeping
+t-shirt</pre>
+              <p>Capitalization and accents don't matter, duplicates get dropped automatically, and up to three words per entry is about the sweet spot.</p>
+            </div>
+          </details>
+        <div class="le-row">
+          <span class="le-count" id="le-count">0 words</span>
+          <button class="btn btn-small btn-alt" id="btn-le-cancel">Cancel</button>
+          <button class="btn btn-small" id="btn-le-save">💾 Save list</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="tab-pane" id="tab-gallery">
+      <div class="gallery-grid" id="gallery-grid"></div>
+      <p class="gallery-empty" id="gallery-empty">Nothing here yet. Draw something you're proud of and save it — or leave auto-save on and it'll happen by itself.</p>
+    </div>
+
+    <div class="tab-pane" id="tab-friends">
+      <div class="friend-code-row">
+        <div>
+          <div class="friend-code-label">Your friend code</div>
+          <div class="toggle-hint">Give this to people so they can add you.</div>
+        </div>
+        <button class="friend-code" id="friend-code" title="Click to copy">······</button>
+      </div>
+      <div class="le-row" style="margin-bottom:16px">
+        <input type="text" id="friend-add-code" class="input" placeholder="Friend's code" maxlength="6" style="text-transform:uppercase;letter-spacing:2px" />
+        <button class="btn btn-small" id="btn-friend-add">Add friend</button>
+      </div>
+      <div id="friend-requests"></div>
+      <div class="lists-rows" id="friend-rows"></div>
+      <p class="gallery-empty" id="friends-empty" style="display:none">No friends on here yet. Swap codes, or hit ＋ next to someone while you're playing together.</p>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="modal-settings" style="display:none">
+  <div class="modal modal-sm">
+    <button class="modal-x" data-close="modal-settings">✕</button>
+    <h2>⚙️ Settings</h2>
+    <div class="form">
+      <div class="set-row"><label>Theme</label>
+        <div class="seg" id="seg-theme">
+          <button data-theme-opt="light" class="seg-btn">☀️ Light</button>
+          <button data-theme-opt="dark" class="seg-btn">🌙 Dark</button>
+        </div>
+      </div>
+      <div class="set-row"><label>Music</label>
+        <div class="set-inline"><input type="checkbox" id="set-music-on" class="switch" /><input type="range" id="set-music-vol" min="0" max="100" value="50" /></div>
+      </div>
+      <div class="set-row"><label>Sound effects</label>
+        <div class="set-inline"><input type="checkbox" id="set-sfx-on" class="switch" /><input type="range" id="set-sfx-vol" min="0" max="100" value="80" /></div>
+      </div>
+      <div class="set-row"><label>UI size</label>
+        <div class="set-inline"><input type="range" id="set-scale" min="80" max="125" step="5" value="100" /><span class="opt-val" id="set-scale-val">100%</span></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+<div class="invite-toast" id="invite-toast" style="display:none">
+  <span class="invite-text" id="invite-text"></span>
+  <button class="btn btn-small" id="invite-join">Join</button>
+  <button class="mini-btn" id="invite-dismiss">✕</button>
+</div>
+<canvas id="confetti" width="0" height="0"></canvas>
+
+<script src="/socket.io/socket.io.js"></script>
+<script src="/js/profanity.js"></script>
+<script src="/js/audio.js"></script>
+<script src="/js/api.js"></script>
+<script src="/js/account.js"></script>
+<script src="/js/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,72 @@
+# 🦌 Mivimoose Draw
+
+A multiplayer drawing & guessing game. One of you scribbles, everyone else yells guesses. Node.js + Socket.io, no build step, no native dependencies.
+
+## Running it
+
+```bash
+npm install
+npm start          # → http://localhost:3000
+```
+
+Dev auto-reload: `npm run dev`. End-to-end smoke test (~85 checks, runs against its own temp data dir): `npm run smoke`.
+
+Player data (accounts, lists, gallery PNGs, the shared library, friends) lives in `data/` — delete the folder to reset everything.
+
+## Sign-in with Discord (2-minute setup)
+
+Discord is the only way to sign in — no passwords anywhere. Guests can play everything; an account is what keeps your lists, drawings, stats and friends around, and it's required for sharing to the list library. Until you connect a Discord app the sign-in button explains that it's off.
+
+1. Go to https://discord.com/developers/applications → **New Application** → give it a name.
+2. Open **OAuth2** in the left menu. Copy the **Client ID**, then hit **Reset Secret** and copy the **Client Secret**.
+3. Under **Redirects**, add exactly: `http://localhost:3000/api/auth/discord/callback` (swap in your real address/port if you host it somewhere else) and save.
+4. In the project folder copy `config.example.json` to `config.json` and paste the two values in. Set `baseUrl` to wherever players reach the server (it must match the redirect above).
+5. Restart the server. Done.
+
+Environment variables work too and win over the file: `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`, `BASE_URL`.
+
+## What's in it
+
+- **Play online** — drops you straight into a public game that's already going (or starts one if nobody's playing). Classic word list, rounds auto-start.
+- **Private rooms** — 4-letter codes, invite links (`/?join=CODE`), public listing toggle, kick, host migration.
+- **Friends** — every account has a 6-character friend code. Add people by code, or hit ＋ next to anyone you're playing with (public or private). Friends show online status and can be invited straight into your room — they get a pop-up with a Join button.
+- **Word lists** — ships with the 1,300+ word Classic list; drop more `.txt` files into `words/` if you want. Hosts can add lists on the fly, attach lists saved on their account, weight lists 1–10, and check **ℹ️ Odds** to see the exact chance of each list showing up.
+- **List library** — share a list with everyone, browse what others shared, download as `.txt`, save to your account, or pull one straight into the room you're hosting. Sharing needs an account, and swear protection runs on every upload.
+- **Accounts** — unlimited saved lists (import/export), a gallery of your drawings (auto-save optional), stats, friends.
+- **Game settings** — every setting has a **?** that explains it. Defaults: 10 rounds, 90s draw time, 5 word choices, 5 hints, 10 players, Easy autocorrect. Modes: combinations (two words at once, with optional lock-in of guessed halves), co-op drawing, hidden mode, text tool (artists can type on the canvas — but not the answer), spam protection.
+- **Autocorrect** — four levels. Off is exact spelling only. Easy forgives one typo on longer words and plurals. Normal allows a typo on most words and two on long ones. Generous accepts pretty much anything close. Swapped letters count as one typo, accents and punctuation are ignored, and on the stricter levels short words still have to start with the right letter.
+- **Quality of life** — reconnect keeps your seat and score, vote-to-skip, ❤️ likes, avatar picker, fullscreen focus mode (`F`), tool hotkeys, a canvas that sizes itself to your screen, dark mode, synthesized sound effects and background music.
+- **Moderation & safety** — per-room spam protection (always on in public games), socket flood limits, per-IP rate limits on the API, security headers/CSP, XSS-safe rendering, the answer is never sent to players who haven't guessed.
+- **Performance** — gzip on everything, cached static assets, pointer-event coalescing for smooth strokes, and freehand drawing batched into ~30 packets a second instead of one per mouse move.
+
+## How scoring works
+
+Guessers get 250–500 points depending on how much time is left, minus a little for each person who beat them to it. The artist gets paid once, at the end of the round, in proportion to how many people guessed — up to 350, plus 50 if everyone got it.
+
+After each correct guess the clock gets capped based on how many guessers are still working: in a 4-guesser 90s round the first correct guess caps it at 49s, then 35s, then 22s, and the last person always keeps at least 12 seconds.
+
+## Project layout
+
+```
+server.js            entry — express + socket.io + security headers + gzip
+lib/
+  game.js            rooms, matchmaking, game loop, spam protection, presence
+  similarity.js      the autocorrect engine
+  friends.js         friend codes, requests, friends list
+  words.js           word lists + weighted picking
+  api.js             REST: Discord auth, lists, gallery, library, friends, rooms
+  auth.js            account records & session tokens
+  config.js          config.json / env loading
+  store.js           JSON persistence + drawing files
+public/
+  index.html         the app
+  css/style.css      styling
+  js/app.js          game client
+  js/account.js      sign-in, account panel, friends
+  js/api.js          REST client + identity
+  js/audio.js        synthesized SFX + generative music
+  js/profanity.js    shared swear filter (server uses it too)
+words/classic.txt    the built-in list (add more .txt files here)
+legacy/              the pre-2.0 client and the old word lists
+test/smoke.js        end-to-end smoke test
+```

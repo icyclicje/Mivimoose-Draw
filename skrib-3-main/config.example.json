@@ -1,0 +1,5 @@
+{
+  "discordClientId": "YOUR_DISCORD_APP_CLIENT_ID",
+  "discordClientSecret": "YOUR_DISCORD_APP_CLIENT_SECRET",
+  "baseUrl": "http://localhost:3000"
+}

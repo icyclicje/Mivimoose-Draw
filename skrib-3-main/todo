@@ -1,0 +1,9 @@
+when you download the drawing it should show the name of the person who drew it
+when downloading the drawing the name of the image file should be the term that was drawn
+in combinations, when one of the terms is locked in, the other term is missing correct spacing, and amount of letters in each word
+In coop the undo button reverts the canvas to the last time the player who pushes it drew something, it should only erase their markings
+when someone gets the term it should remove 1/3 of the remaining time instead of making it tick down faster. make sure the hints are redistributed along the remaining time
+in coop mode only one artist is marked as such in the player list on the left. it also should say "name and name are choosing a word" for the other players
+in coop the other artist should be able to see the other player's options while they are picking
+add a skip button for the host at the end of the game when the timer counts down to 10 seconds 
+add a game option for number of rounds
