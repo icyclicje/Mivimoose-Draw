@@ -66,8 +66,9 @@
 
   <div class="topbar-actions">
     <button class="icon-btn" id="btn-music" title="Music on/off">🎵</button>
-    <button class="icon-btn" id="btn-theme" title="Light / dark theme">🌙</button>
+    <button class="icon-btn" id="btn-theme" title="Change theme">🌙</button>
     <button class="icon-btn" id="btn-settings" title="Settings">⚙️</button>
+    <button class="btn btn-small btn-leave" id="btn-leave" style="display:none">🚪 Leave</button>
     <button class="account-chip" id="account-chip">
       <span class="account-chip-avatar" id="account-chip-avatar">👤</span>
       <span id="account-chip-name">Sign in</span>
@@ -219,11 +220,21 @@ t-shirt</pre>
             <div class="opt" data-help="maxPlayers"><label>Max players</label><input type="range" id="opt-maxPlayers" min="2" max="20" value="10" /><span class="opt-val" id="opt-maxPlayers-val">10</span></div>
             <div class="opt" data-help="autocorrectStrength"><label>Autocorrect</label><input type="range" id="opt-autocorrectStrength" min="0" max="3" value="1" /><span class="opt-val" id="opt-autocorrectStrength-val">Easy</span></div>
           </div>
+          <div class="opt-extra" data-help="canvasBackground">
+            <label>Canvas paper</label>
+            <select id="opt-canvasBackground" class="input select">
+              <option value="plain">Plain</option>
+              <option value="grid">Graph grid</option>
+              <option value="dots">Dot grid</option>
+              <option value="lined">Lined paper</option>
+            </select>
+          </div>
           <div class="opt-toggles">
             <label class="toggle-row" data-help="combinations"><input type="checkbox" id="opt-combinations" class="switch" /><span>Combinations<span class="toggle-hint">Draw two words at once</span></span></label>
             <label class="toggle-row" data-help="lockComboParts"><input type="checkbox" id="opt-lockComboParts" class="switch" checked /><span>Lock combo parts<span class="toggle-hint">Needs Combinations on</span></span></label>
             <label class="toggle-row" data-help="hidden"><input type="checkbox" id="opt-hidden" class="switch" /><span>Hidden mode<span class="toggle-hint">No hints or letter counts</span></span></label>
             <label class="toggle-row" data-help="coopMode"><input type="checkbox" id="opt-coopMode" class="switch" /><span>Co-op drawing<span class="toggle-hint">Two artists per round (3+ players)</span></span></label>
+            <label class="toggle-row" data-help="sceneBackgrounds"><input type="checkbox" id="opt-sceneBackgrounds" class="switch" /><span>Scene backdrops<span class="toggle-hint">Artists can drop a scene behind their drawing</span></span></label>
             <label class="toggle-row" data-help="textTool"><input type="checkbox" id="opt-textTool" class="switch" /><span>Text tool<span class="toggle-hint">Artists can type on the canvas</span></span></label>
             <label class="toggle-row" data-help="showWordSource"><input type="checkbox" id="opt-showWordSource" class="switch" /><span>Show word source<span class="toggle-hint">Reveal which list the word came from</span></span></label>
             <label class="toggle-row" data-help="avoidRepeats"><input type="checkbox" id="opt-avoidRepeats" class="switch" checked /><span>Avoid repeats<span class="toggle-hint" id="avoid-hint">Words that already came up stay out of the rotation</span></span></label>
@@ -304,6 +315,7 @@ t-shirt</pre>
             <button class="tool-btn" data-tool="circle" title="Ellipse (C)">◯</button>
             <button class="tool-btn" data-tool="triangle" title="Triangle (T)">△</button>
             <button class="tool-btn tool-text" data-tool="text" id="tool-text" title="Text (X)" style="display:none">T</button>
+            <button class="tool-btn" id="tool-scene" title="Pick a backdrop" style="display:none">🖼️</button>
           </div>
           <div class="tool-sep"></div>
           <div class="size-dots" id="size-dots"></div>
@@ -360,6 +372,13 @@ t-shirt</pre>
     <h2>🏆 Final standings</h2>
     <div class="podium" id="podium"></div>
     <div class="final-list" id="final-list"></div>
+    <div class="ge-actions">
+      <button class="btn btn-small btn-alt" id="btn-gif">🎬 Save the game as a GIF</button>
+      <div class="gif-progress" id="gif-progress" style="display:none">
+        <div class="gif-bar"><i id="gif-bar-fill"></i></div>
+        <span id="gif-status">Putting it together…</span>
+      </div>
+    </div>
     <p class="ge-countdown">Back to the lobby in <span id="ge-count">12</span>s…</p>
     <button class="btn btn-small" id="btn-skip-lobby" style="display:none">⏭️ Back to lobby now</button>
   </div>
@@ -394,6 +413,12 @@ t-shirt</pre>
       <button class="tab" data-libtab="upload">Share a list</button>
     </div>
     <div class="tab-pane active" id="libtab-browse">
+      <div class="lists-toolbar">
+        <button class="btn btn-small" id="btn-lib-new">➕ Add a list</button>
+        <button class="btn btn-small btn-alt" id="btn-lib-folder">📁 Add a folder of lists</button>
+        <input type="file" id="lib-folder-input" accept=".txt" multiple webkitdirectory directory style="display:none" />
+        <span class="lists-note" id="lib-count-note"></span>
+      </div>
       <div class="lists-rows" id="lib-rows"></div>
       <p class="gallery-empty" id="lib-empty" style="display:none">Nothing in here yet. Someone has to go first — might as well be you.</p>
     </div>
@@ -417,6 +442,7 @@ t-shirt</pre>
           <span class="le-count" id="lib-count">0 words</span>
           <button class="btn btn-small btn-alt" id="btn-lib-import">📂 Import .txt</button>
           <input type="file" id="lib-file" accept=".txt" style="display:none" />
+          <button class="btn btn-small btn-alt" id="btn-lib-folder2">📁 Whole folder</button>
           <button class="btn btn-small" id="btn-lib-upload">⬆️ Share it</button>
         </div>
         <p class="toggle-hint">Swear protection runs on everything shared here — rude words get quietly dropped before anyone sees them.</p>
@@ -507,16 +533,22 @@ t-shirt</pre>
   </div>
 </div>
 
+<div class="modal-backdrop" id="modal-scenes" style="display:none">
+  <div class="modal modal-lg">
+    <button class="modal-x" data-close="modal-scenes">✕</button>
+    <h2>🖼️ Pick a backdrop</h2>
+    <p class="modal-sub">Draw on top of it — it saves and shares with your drawing. Picking one clears the canvas, so choose before you start.</p>
+    <div class="scene-grid" id="scene-grid"></div>
+  </div>
+</div>
+
 <div class="modal-backdrop" id="modal-settings" style="display:none">
   <div class="modal modal-sm">
     <button class="modal-x" data-close="modal-settings">✕</button>
     <h2>⚙️ Settings</h2>
     <div class="form">
       <div class="set-row"><label>Theme</label>
-        <div class="seg" id="seg-theme">
-          <button data-theme-opt="light" class="seg-btn">☀️ Light</button>
-          <button data-theme-opt="dark" class="seg-btn">🌙 Dark</button>
-        </div>
+        <div class="theme-grid" id="theme-grid"></div>
       </div>
       <div class="set-row"><label>Music</label>
         <div class="set-inline"><input type="checkbox" id="set-music-on" class="switch" /><input type="range" id="set-music-vol" min="0" max="100" value="50" /></div>
@@ -541,6 +573,9 @@ t-shirt</pre>
 
 <script src="/socket.io/socket.io.js"></script>
 <script src="/js/profanity.js"></script>
+<script src="/js/gif.js"></script>
+<script src="/js/fill.js"></script>
+<script src="/js/scenes.js"></script>
 <script src="/js/audio.js"></script>
 <script src="/js/api.js"></script>
 <script src="/js/account.js"></script>

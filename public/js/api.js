@@ -111,6 +111,7 @@
     libraryList: (id) => req('GET', '/library/' + id),
     libraryUpload: (payload) => req('POST', '/library', payload),
     libraryDelete: (id) => req('DELETE', '/library/' + id),
+    libraryRename: (id, name) => req('PUT', '/library/' + id, { name }),
     libraryDownloadUrl: (id) => '/api/library/' + id + '/download',
 
     friends: () => req('GET', '/friends'),

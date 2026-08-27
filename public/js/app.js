@@ -26,6 +26,11 @@
   let likeUsed = false;
   let wasArtistThisRound = false;  // survives setArtistMode(false) at round end
   let curWordSource = null, curWordSource2 = null;
+  let gameFrames = [];             // one snapshot per finished round, for the GIF
+  let uiBusyUntil = 0;             // don't rebuild lobby panels while they're being used
+
+  // Skip expensive re-renders for a moment after the host touches a control.
+  function markUiBusy(ms) { uiBusyUntil = Date.now() + (ms || 900); }
 
   // Round-end snapshot
   let snap = null; // {dataUrl, word, artist, guessedCount, playerCount, likes, savedToGallery}
@@ -33,19 +38,120 @@
   // Drawing state
   const CANVAS_W = 1000, CANVAS_H = 750;
   let ctx, pctx;
-  let canvasBg = '#ffffff';
+  let canvasBg = '#ffffff';   // wire value for eraser events (receivers use their own paper)
+  let bgStyle = '#ffffff';    // what we actually paint the paper with (colour or CanvasPattern)
+  let bgKind = 'plain';
+  let sceneId = null;         // backdrop chosen for this round (null = plain paper)
+  let bgSceneId = null;       // which backdrop bgStyle was built from
+
+  // The paper is baked into the canvas, so it lands in downloads and the GIF
+  // too. The eraser paints with this same style, which restores the pattern
+  // exactly (patterns are anchored to the canvas origin).
+  function makeBgStyle(kind) {
+    if (kind === 'plain' || !ctx) return '#ffffff';
+    const tile = document.createElement('canvas');
+    const S = 40;
+    tile.width = tile.height = S;
+    const c = tile.getContext('2d');
+    c.fillStyle = '#ffffff';
+    c.fillRect(0, 0, S, S);
+    if (kind === 'grid') {
+      c.strokeStyle = '#dde3ef'; c.lineWidth = 1;
+      c.beginPath(); c.moveTo(0.5, 0); c.lineTo(0.5, S); c.moveTo(0, 0.5); c.lineTo(S, 0.5); c.stroke();
+    } else if (kind === 'dots') {
+      c.fillStyle = '#ccd4e4';
+      c.beginPath(); c.arc(S / 2, S / 2, 2, 0, Math.PI * 2); c.fill();
+    } else if (kind === 'lined') {
+      c.strokeStyle = '#e2e8f3'; c.lineWidth = 1;
+      c.beginPath(); c.moveTo(0, S - 0.5); c.lineTo(S, S - 0.5); c.stroke();
+    }
+    return ctx.createPattern(tile, 'repeat') || '#ffffff';
+  }
+
+  function syncCanvasBackground() {
+    const opts = (gameState && gameState.options) || {};
+    const wantScene = opts.sceneBackgrounds ? sceneId : null;
+    if (wantScene && window.MiviScenes && window.MiviScenes.has(wantScene)) {
+      if (bgSceneId === wantScene) return;
+      // A full-size, non-repeating pattern: the eraser paints with this too,
+      // so rubbing something out puts the backdrop back exactly.
+      const sc = document.createElement('canvas');
+      sc.width = CANVAS_W;
+      sc.height = CANVAS_H;
+      const scx = sc.getContext('2d');
+      scx.fillStyle = '#ffffff';
+      scx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+      window.MiviScenes.draw(scx, wantScene, CANVAS_W, CANVAS_H);
+      bgStyle = (ctx && ctx.createPattern(sc, 'no-repeat')) || '#ffffff';
+      bgSceneId = wantScene;
+      bgKind = null;
+      return;
+    }
+    const kind = opts.canvasBackground || 'plain';
+    if (kind !== bgKind || bgSceneId !== null) {
+      bgKind = kind;
+      bgSceneId = null;
+      bgStyle = makeBgStyle(kind);
+    }
+  }
+
+  // ── Backdrop picker ──
+  function buildSceneGrid() {
+    const grid = $('scene-grid');
+    if (!grid || grid.dataset.built === '1' || !window.MiviScenes) return;
+    grid.dataset.built = '1';
+
+    const addCard = (id, name, painter) => {
+      const card = el('div', 'scene-card');
+      card.dataset.scene = id === null ? '' : id;
+      const thumb = document.createElement('canvas');
+      thumb.width = 200;
+      thumb.height = 150;
+      painter(thumb.getContext('2d'));
+      card.appendChild(thumb);
+      card.appendChild(el('span', 'sn', name));
+      card.addEventListener('click', () => {
+        socket.emit('setScene', { id });
+        $('modal-scenes').style.display = 'none';
+        sfx('pop');
+      });
+      grid.appendChild(card);
+    };
+
+    addCard(null, 'No backdrop', (c) => {
+      c.fillStyle = '#ffffff';
+      c.fillRect(0, 0, 200, 150);
+      c.strokeStyle = '#c9d2e3';
+      c.lineWidth = 3;
+      c.beginPath();
+      c.moveTo(30, 120); c.lineTo(170, 30);
+      c.stroke();
+    });
+    for (const s of window.MiviScenes.list()) {
+      addCard(s.id, s.emoji + ' ' + s.name, (c) => window.MiviScenes.draw(c, s.id, 200, 150));
+    }
+  }
+
+  function openScenePicker() {
+    buildSceneGrid();
+    document.querySelectorAll('#scene-grid .scene-card').forEach(c => {
+      c.classList.toggle('active', c.dataset.scene === (sceneId || ''));
+    });
+    $('modal-scenes').style.display = 'flex';
+  }
   let currentTool = 'pen';
   let currentColor = '#111111';
   let brushSize = 6;
   let drawing = false;
   let lastX = 0, lastY = 0;
   let shape = null; // {x1,y1}
+  let midX = 0, midY = 0;   // running midpoint for smoothed strokes
   let strokeEvents = [];
 
   const SIZES = [3, 6, 10, 16, 26, 38];
   // Two rows: a bold tone on top, its lighter sibling underneath.
   const PALETTE = [
-    '#111111', '#606060', '#c62828', '#ef6c00', '#f9a825', '#2e7d32', '#00897b', '#0277bd', '#1a237e', '#6a1b9a', '#ad1457', '#5d4037', '#b07b4f', '#ffffff',
+    '#111111', '#606060', '#e5484d', '#ef6c00', '#f9a825', '#2e7d32', '#00897b', '#0277bd', '#1a237e', '#6a1b9a', '#ad1457', '#5d4037', '#b07b4f', '#ffffff',
     '#424242', '#bdbdbd', '#ff5252', '#ffab40', '#fff176', '#69f0ae', '#64ffda', '#40c4ff', '#7986cb', '#b388ff', '#ff80ab', '#8d6e63', '#f5cba7', '#fbe9d7',
   ];
   const EMOJIS = ['🎨','🦌','🐱','🐶','🦊','🐻','🐼','🐸','🐙','🦄','🐝','🦖','🐢','🐧','🦉','🐳','🍕','🌵','👻','🤖','👽','🧙','🥷','🦩'];
@@ -194,6 +300,7 @@
       snap = null;
       curWordSource = null;
       curWordSource2 = null;
+      sceneId = null;
       hideOverlay('overlay-roundend');
       phaseTotal = 20;
       setTimer(state.timeLeft ?? 20);
@@ -238,6 +345,8 @@
       $('overlay-choice').style.display = 'none';
       $('overlay-choosing').style.display = 'none';
       $('overlay-wait').style.display = 'none';
+      sceneId = state.scene || null;
+      syncCanvasBackground();
       phaseTotal = state.options.roundTime;
       setTimer(state.timeLeft);
       const amArtist = state.drawerId === myId || state.coopPartnerId === myId;
@@ -288,6 +397,12 @@
       }
     });
 
+    socket.on('sceneSet', ({ id }) => {
+      sceneId = id || null;
+      syncCanvasBackground();
+      clearCanvasLocal();
+      closeTextInput();
+    });
     socket.on('draw', (data) => applyDraw(data));
     socket.on('drawBatch', (events) => { if (Array.isArray(events)) events.forEach(applyDraw); });
     socket.on('clearCanvas', () => clearCanvasLocal());
@@ -373,6 +488,7 @@
 
     socket.on('backToLobby', (state) => {
       gameState = state;
+      gameFrames = [];
       hideOverlay('overlay-roundend');
       hideOverlay('overlay-gameend');
       hasGuessed = false;
@@ -403,6 +519,9 @@
       window.MiviAccount.refreshFriends();
     });
 
+    socket.on('customListRenamed', ({ to }) => toast(`✏️ Renamed to "${to}"`));
+    socket.on('customListRemoved', ({ name }) => toast(`🗑️ Removed "${name}"`));
+
     socket.on('customListAdded', ({ name, count }) => {
       toast(`✅ Added "${name}" (${count} words)`);
       $('cl-name').value = '';
@@ -425,6 +544,7 @@
     gameState = state;
     API.lsSet('mivi_room', code);
     $('room-pill').style.display = 'flex';
+    $('btn-leave').style.display = 'inline-block';
     $('room-pill-code').textContent = code;
     $('home-error').textContent = '';
 
@@ -445,6 +565,8 @@
         setTimer(state.timeLeft);
       }
       if (state.state === 'drawing') {
+        sceneId = state.scene || null;
+        syncCanvasBackground();
         phaseTotal = state.options.roundTime || 80;
         setTimer(state.timeLeft);
         $('overlay-wait').style.display = 'none';
@@ -475,10 +597,14 @@
     }
     const card = $('canvas-card');
     const toolbar = $('toolbar');
-    const toolbarH = toolbar.style.display !== 'none' ? toolbar.offsetHeight + 10 : 0;
+    const toolbarH = toolbar.style.display !== 'none' ? toolbar.offsetHeight + 12 : 0;
     const top = card.getBoundingClientRect().top;
-    const avail = window.innerHeight - top - toolbarH - 40;
-    const maxW = Math.max(360, Math.floor(avail * 4 / 3));
+    const vh = (window.visualViewport && window.visualViewport.height) || window.innerHeight;
+    // 24px of breathing room under the card, plus whatever the toolbar needs.
+    const avail = vh - top - toolbarH - 24;
+    const byHeight = Math.floor(avail * 4 / 3);
+    const byWidth = card.clientWidth - 24;
+    const maxW = Math.max(320, Math.min(byHeight, byWidth || byHeight));
     frame.style.setProperty('--canvas-max', maxW + 'px');
   }
 
@@ -488,6 +614,8 @@
     gameState = null;
     API.lsDel('mivi_room');
     $('room-pill').style.display = 'none';
+    $('btn-leave').style.display = 'none';
+    gameFrames = [];
     hideOverlay('overlay-roundend');
     hideOverlay('overlay-gameend');
     $('overlay-choice').style.display = 'none';
@@ -559,7 +687,9 @@
       const av = el('span', 'p-avatar', p.avatar?.emoji || '🎨');
       av.style.background = (p.avatar?.color || '#6C5CE7') + '33';
       chip.appendChild(av);
-      chip.appendChild(el('span', 'nm', p.name + (p.id === myId ? ' (you)' : '')));
+      const chipName = el('span', 'nm', p.name + (p.id === myId ? ' (you)' : ''));
+      chipName.title = p.name;
+      chip.appendChild(chipName);
       if (p.id === s.host) chip.appendChild(el('span', null, '👑'));
       if (isHost && p.id !== myId) {
         const kick = el('button', 'kick', '✕');
@@ -570,6 +700,7 @@
       grid.appendChild(chip);
     }
 
+    document.querySelector('.lobby-grid').classList.toggle('guest', !isHost);
     $('public-toggle-row').style.display = isHost ? 'flex' : 'none';
     $('btn-lobby-friends').style.display = window.MiviAccount.isLoggedIn() ? 'block' : 'none';
     $('toggle-public').checked = !!s.public;
@@ -586,7 +717,9 @@
     $('options-panel').style.display = isHost ? 'block' : 'none';
     $('options-readonly').style.display = isHost ? 'none' : 'block';
     if (isHost) {
-      renderWordLists(s.wordLists);
+      // Rebuilding these while a slider is being dragged is what made the
+      // controls feel laggy — skip it until the host stops fiddling.
+      if (Date.now() > uiBusyUntil) renderWordLists(s.wordLists);
       syncOptions(s.options);
       renderMyLists();
       if (s.wordPool) {
@@ -612,6 +745,7 @@
       ['Mode', o.combinations ? 'Combos' : o.coopMode ? 'Co-op' : o.hidden ? 'Hidden' : 'Classic'],
       ['Spam guard', o.spamProtection ? 'On' : 'Off'],
       ['Repeats', o.avoidRepeats ? 'Avoided' : 'Allowed'],
+      ['Paper', (o.canvasBackground || 'plain').replace(/^./, c => c.toUpperCase())],
     ];
     for (const [label, val] of items) {
       const item = el('div', 'ro-item');
@@ -623,6 +757,7 @@
 
   let wlDebounce = null;
   function sendWordLists() {
+    markUiBusy();
     renderListOdds();
     clearTimeout(wlDebounce);
     wlDebounce = setTimeout(() => {
@@ -663,9 +798,50 @@
       cb.value = info.name;
       cb.checked = checked;
       top.appendChild(cb);
-      top.appendChild(el('span', null, info.label || info.name));
+      const nameEl = el('span', 'wl-name', info.label || info.name);
+      nameEl.title = info.label || info.name;
+      top.appendChild(nameEl);
       if (info.custom) top.appendChild(el('span', 'wl-badge', 'CUSTOM'));
       top.appendChild(el('span', 'cnt', String(info.count)));
+      if (info.custom) {
+        const ren = el('button', 'wl-rename', '✏️');
+        ren.title = 'Rename this list';
+        ren.onclick = (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          markUiBusy(8000);
+          const inp = document.createElement('input');
+          inp.className = 'wl-name-input';
+          inp.value = info.name;
+          inp.maxLength = 40;
+          const finish = (save) => {
+            const v = inp.value.trim();
+            inp.replaceWith(nameEl);
+            uiBusyUntil = 0;
+            if (save && v && v !== info.name) socket.emit('renameCustomList', { name: info.name, newName: v });
+          };
+          inp.addEventListener('keydown', (ev) => {
+            ev.stopPropagation();
+            if (ev.key === 'Enter') finish(true);
+            else if (ev.key === 'Escape') finish(false);
+          });
+          inp.addEventListener('blur', () => finish(true));
+          nameEl.replaceWith(inp);
+          inp.focus();
+          inp.select();
+        };
+        top.appendChild(ren);
+        const rm = el('button', 'wl-remove', '🗑️');
+        rm.title = 'Remove this list from the room';
+        rm.onclick = (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          if (!confirm(`Remove "${info.name}" from this room?`)) return;
+          markUiBusy(0);
+          socket.emit('removeCustomList', { name: info.name });
+        };
+        top.appendChild(rm);
+      }
       item.appendChild(top);
 
       const wrow = el('div', 'wl-weight');
@@ -685,6 +861,7 @@
       }
       item.appendChild(wrow);
 
+      slider.addEventListener('pointerdown', () => markUiBusy(4000));
       cb.addEventListener('change', () => {
         item.classList.toggle('on', cb.checked);
         slider.disabled = !cb.checked;
@@ -699,7 +876,13 @@
   // "Odds" breakdown: the chance the next word comes from each selected list.
   // Only the weight moves this — list size doesn't (a word is picked from the
   // chosen list afterwards).
+  let oddsFrame = null;
   function renderListOdds() {
+    if (oddsFrame) return;              // at most one rebuild per frame
+    oddsFrame = requestAnimationFrame(() => { oddsFrame = null; renderListOddsNow(); });
+  }
+
+  function renderListOddsNow() {
     const box = $('list-odds');
     if (!box || box.style.display === 'none') return;
     const items = [];
@@ -748,7 +931,7 @@
   }
 
   const OPT_KEYS = ['rounds', 'roundTime', 'wordChoices', 'hintCount', 'maxPlayers', 'autocorrectStrength'];
-  const OPT_TOGGLES = ['combinations', 'lockComboParts', 'hidden', 'coopMode', 'showWordSource', 'spamProtection', 'textTool', 'avoidRepeats'];
+  const OPT_TOGGLES = ['combinations', 'lockComboParts', 'hidden', 'coopMode', 'showWordSource', 'spamProtection', 'textTool', 'avoidRepeats', 'sceneBackgrounds'];
 
   // Plain-language explanations shown when you tap the ? next to a setting.
   const HELP = {
@@ -765,6 +948,8 @@
     textTool: 'Lets artists type text onto the canvas with the T tool. Writing the actual word (or anything close to it) is blocked.',
     showWordSource: 'After each round, show which list the word came from.',
     avoidRepeats: "Words that have already been drawn — or even shown as a choice — stay out of the rotation for this room, across games, until you change lists. Tiny lists can't get stuck: if the list runs dry, words that were only offered come back first, then ones that were drawn.",
+    sceneBackgrounds: "Gives whoever is drawing a 🖼️ button with ready-made backdrops — a city, a beach, space, a football pitch and plenty more. Handy when the word needs a setting; picking one clears the canvas, so pick it first.",
+    canvasBackground: 'The paper everyone draws on. Grid and dot backgrounds help with proportions; the eraser puts the pattern back rather than painting over it.',
     spamProtection: 'Anyone sending more than six messages in five seconds, or the same thing three times in a row, gets muted for ten seconds. Always on in public games.',
   };
 
@@ -785,7 +970,7 @@
         btn.classList.toggle('on', show);
       });
       const label = wrap.querySelector('label, span');
-      if (wrap.classList.contains('opt')) label.after(btn); else wrap.appendChild(btn);
+      if (wrap.classList.contains('opt')) label.appendChild(btn); else wrap.appendChild(btn);
       wrap.appendChild(box);
     });
   }
@@ -819,6 +1004,10 @@
       if (input) input.checked = !!o[key];
     }
     gateComboLock();
+    const paper = $('opt-canvasBackground');
+    if (paper && document.activeElement !== paper) paper.value = o.canvasBackground || 'plain';
+    // A new paper choice only shows up once the canvas is repainted.
+    if (bgKind !== (o.canvasBackground || 'plain')) syncCanvasBackground();
   }
 
   // ── Game screen widgets ──
@@ -841,7 +1030,14 @@
       const av = el('span', 'p-avatar', p.avatar?.emoji || '🎨');
       av.style.background = (p.avatar?.color || '#6C5CE7') + '33';
       row.appendChild(av);
-      row.appendChild(el('span', 'nm', p.name + (p.id === myId ? ' (you)' : '')));
+      const nm = el('span', 'nm', p.name + (p.id === myId ? ' (you)' : ''));
+      nm.title = p.name;
+      row.appendChild(nm);
+      if (p.id === s.host && !s.managed) {
+        const crown = el('span', 'crown', '👑');
+        crown.title = 'Host';
+        row.appendChild(crown);
+      }
       if (isDrawing) row.appendChild(el('span', 'flag', '🖌️'));
       else if (guessed) row.appendChild(el('span', 'flag', '✅'));
       // ＋ = send a friend request (both of you need accounts).
@@ -852,7 +1048,7 @@
         add.onclick = (ev) => { ev.stopPropagation(); socket.emit('friendRequest', { playerId: p.id }); };
         row.appendChild(add);
       }
-      row.appendChild(el('span', 'sc', String(p.score)));
+      row.appendChild(el('span', 'sc', p.score + ' pts'));
       if (opts.bumpId === p.id) row.appendChild(el('span', 'bump', '+' + opts.bumpPts));
       list.appendChild(row);
     });
@@ -973,6 +1169,8 @@
     $('toolbar').style.display = artist ? 'flex' : 'none';
     const textOn = !!(gameState && gameState.options && gameState.options.textTool);
     $('tool-text').style.display = textOn ? 'flex' : 'none';
+    const sceneOn = !!(gameState && gameState.options && gameState.options.sceneBackgrounds);
+    $('tool-scene').style.display = (artist && sceneOn) ? 'flex' : 'none';
     if (!textOn && currentTool === 'text') setTool('pen');
     closeTextInput();
     requestAnimationFrame(fitCanvas);
@@ -985,11 +1183,18 @@
   }
 
   function updateLikeSkipUI() {
-    const inDrawing = gameState && gameState.state === 'drawing';
-    const show = inDrawing && !isArtist;
-    $('float-actions').style.display = show ? 'flex' : 'none';
+    const inDrawing = !!(gameState && gameState.state === 'drawing');
+    const isHost = !!(gameState && gameState.host === myId && !gameState.managed);
+    // Liking is for anyone but the artist. Skipping is the host's call in a
+    // private room (whoever is drawing), or a majority vote in a public one.
+    const canLike = inDrawing && !isArtist;
+    const canSkip = inDrawing && (gameState.managed ? !isArtist : isHost);
+    $('btn-like').style.display = canLike ? 'flex' : 'none';
+    $('btn-voteskip').style.display = canSkip ? 'flex' : 'none';
+    $('btn-voteskip').title = gameState && gameState.managed ? 'Vote to skip this round' : 'Skip this round (host)';
+    $('float-actions').style.display = (canLike || canSkip) ? 'flex' : 'none';
     $('btn-like').classList.toggle('used', likeUsed);
-    $('btn-voteskip').classList.toggle('used', voteSkipUsed);
+    $('btn-voteskip').classList.toggle('used', gameState && gameState.managed ? voteSkipUsed : false);
     if (!inDrawing) { $('like-count').textContent = ''; $('skip-count').textContent = ''; }
   }
 
@@ -1004,7 +1209,20 @@
       + (msg.close ? ' close' : '')
       + (msg.whisper ? ' whisper' : ''));
     if (msg.system) {
-      node.textContent = msg.text;
+      // "👋 Ada joined!" → an icon bubble plus the text, tinted by what happened.
+      const m = String(msg.text).match(/^(\S{1,3})\s+(.*)$/u);
+      const rest = m ? m[2] : String(msg.text);
+      if (m && /\p{Extended_Pictographic}/u.test(m[1])) {
+        node.appendChild(el('span', 'sys-icon', m[1]));
+        node.appendChild(el('span', 'sys-text', rest));
+      } else {
+        node.appendChild(el('span', 'sys-text', String(msg.text)));
+      }
+      const t = rest.toLowerCase();
+      if (/joined|reconnected|friends now/.test(t)) node.classList.add('sys-in');
+      else if (/left|disconnected|kicked/.test(t)) node.classList.add('sys-out');
+      else if (/host|got the|skipping/.test(t)) node.classList.add('sys-star');
+      else if (/muted|not enough/.test(t)) node.classList.add('sys-warn');
     } else {
       const au = el('span', 'au', (msg.playerName || '?') + ':');
       const p = gameState?.players?.find(pl => pl.id === msg.playerId);
@@ -1065,8 +1283,11 @@
 
   function clearCanvasLocal() {
     if (!ctx) return;
-    ctx.fillStyle = canvasBg;
+    syncCanvasBackground();
+    ctx.save();
+    ctx.fillStyle = bgStyle;
     ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+    ctx.restore();
   }
 
   function pos(e) {
@@ -1100,6 +1321,7 @@
 
   // ── Text tool ──
   let textInput = null;
+  const textPx = () => Math.round(brushSize * 3 + 14);
   function openTextInput(p) {
     closeTextInput();
     const frame = $('canvas-frame');
@@ -1111,7 +1333,21 @@
     input.style.left = (p.x / CANVAS_W * 100) + '%';
     input.style.top = (p.y / CANVAS_H * 100) + '%';
     input.style.color = currentColor;
-    input.style.fontSize = Math.max(12, Math.round((brushSize * 3 + 14) * r.width / CANVAS_W)) + 'px';
+    // Match the drawn text exactly, so the input IS the preview.
+    input.style.font = `800 ${Math.round(textPx() * r.width / CANVAS_W)}px 'Plus Jakarta Sans', system-ui, sans-serif`;
+    // …and mirror it onto the canvas preview layer as they type.
+    input.addEventListener('input', () => {
+      pctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
+      const v = input.value;
+      if (!v) return;
+      pctx.font = `800 ${textPx()}px 'Plus Jakarta Sans', system-ui, sans-serif`;
+      pctx.fillStyle = currentColor;
+      pctx.textBaseline = 'middle';
+      pctx.textAlign = 'left';
+      pctx.globalAlpha = 0.45;
+      pctx.fillText(v.slice(0, 40), p.x, p.y);
+      pctx.globalAlpha = 1;
+    });
     const commit = () => {
       const text = input.value.trim();
       closeTextInput();
@@ -1134,6 +1370,7 @@
   }
   function closeTextInput() {
     if (textInput) { textInput.remove(); textInput = null; }
+    if (pctx) pctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
   }
 
   function startDraw(e) {
@@ -1146,7 +1383,7 @@
     }
     if (currentTool === 'fill') {
       const data = { type: 'fill', x: p.x, y: p.y, color: currentColor };
-      floodFill(ctx, p.x, p.y, currentColor);
+      fillAt(ctx, p.x, p.y, currentColor);
       flushBatch();
       socket.emit('draw', data);
       socket.emit('strokeEnd');
@@ -1159,13 +1396,15 @@
       return;
     }
     lastX = p.x; lastY = p.y;
-    const color = currentTool === 'eraser' ? canvasBg : currentColor;
-    const size = currentTool === 'eraser' ? brushSize * 2 : brushSize;
+    midX = p.x; midY = p.y;
+    const erasing = currentTool === 'eraser';
+    const paint = erasing ? bgStyle : currentColor;
+    const size = erasing ? brushSize * 2 : brushSize;
     ctx.beginPath();
     ctx.arc(p.x, p.y, size / 2, 0, Math.PI * 2);
-    ctx.fillStyle = color;
+    ctx.fillStyle = paint;
     ctx.fill();
-    queueDraw({ type: 'dot', x: p.x, y: p.y, color, size, tool: currentTool });
+    queueDraw({ type: 'dot', x: p.x, y: p.y, color: erasing ? canvasBg : currentColor, size, tool: currentTool });
   }
 
   function draw(e) {
@@ -1175,16 +1414,23 @@
       drawShapePreview(shape.x1, shape.y1, p.x, p.y);
       return;
     }
-    const color = currentTool === 'eraser' ? canvasBg : currentColor;
-    const size = currentTool === 'eraser' ? brushSize * 2 : brushSize;
-    // Coalesced events give every intermediate pointer position → smoother lines.
+    const erasing = currentTool === 'eraser';
+    const wireColor = erasing ? canvasBg : currentColor;
+    const size = erasing ? brushSize * 2 : brushSize;
+    // Coalesced events give every intermediate pointer position, and each pair
+    // of points becomes a quadratic through their midpoints — no more visible
+    // corners at every sample.
     const evs = (e.getCoalescedEvents && e.getCoalescedEvents()) || [];
     const list = evs.length ? evs : [e];
     for (const ce of list) {
       const p = pos(ce);
       if (p.x === lastX && p.y === lastY) continue;
-      drawSeg(ctx, lastX, lastY, p.x, p.y, color, size);
-      queueDraw({ type: 'line', x1: lastX, y1: lastY, x2: p.x, y2: p.y, color, size, tool: currentTool });
+      const mx = (lastX + p.x) / 2;
+      const my = (lastY + p.y) / 2;
+      const ev = { type: 'quad', x1: midX, y1: midY, cx: lastX, cy: lastY, x2: mx, y2: my, color: wireColor, size, tool: currentTool };
+      applyDraw(ev);
+      queueDraw(ev);
+      midX = mx; midY = my;
       lastX = p.x; lastY = p.y;
     }
   }
@@ -1209,6 +1455,19 @@
       return;
     }
     pctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
+    // Close the stroke off at the true last point (the smoothing stops at the
+    // final midpoint, which would otherwise leave a short gap).
+    if (strokeEvents.length > 0 && (midX !== lastX || midY !== lastY)) {
+      const erasing = currentTool === 'eraser';
+      const tail = {
+        type: 'line', x1: midX, y1: midY, x2: lastX, y2: lastY,
+        color: erasing ? canvasBg : currentColor,
+        size: erasing ? brushSize * 2 : brushSize,
+        tool: currentTool,
+      };
+      applyDraw(tail);
+      queueDraw(tail);
+    }
     flushBatch();
     if (strokeEvents.length > 0) {
       strokeEvents = [];
@@ -1250,9 +1509,9 @@
 
   function applyDraw(d) {
     if (!ctx) return;
-    // Eraser strokes always erase to the LOCAL canvas background — the wire
-    // color is the artist's background, which may differ from ours.
-    const col = d.tool === 'eraser' ? canvasBg : d.color;
+    // Eraser strokes always restore OUR paper — the wire colour is only a
+    // placeholder, and the artist may be on a different background.
+    const col = d.tool === 'eraser' ? bgStyle : d.color;
     if (d.type === 'dot') {
       ctx.beginPath();
       ctx.arc(d.x, d.y, d.size / 2, 0, Math.PI * 2);
@@ -1260,14 +1519,25 @@
       ctx.fill();
     } else if (d.type === 'line') {
       drawSeg(ctx, d.x1, d.y1, d.x2, d.y2, col, d.size);
+    } else if (d.type === 'quad') {
+      ctx.beginPath();
+      ctx.moveTo(d.x1, d.y1);
+      ctx.quadraticCurveTo(d.cx, d.cy, d.x2, d.y2);
+      ctx.strokeStyle = col;
+      ctx.lineWidth = d.size;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.stroke();
     } else if (d.type === 'text') {
       ctx.font = `800 ${Math.round((d.size || 6) * 3 + 14)}px 'Plus Jakarta Sans', system-ui, sans-serif`;
+      ctx.textBaseline = 'middle';
+      ctx.textAlign = 'left';
       ctx.fillStyle = d.color;
       ctx.textBaseline = 'middle';
       ctx.textAlign = 'left';
       ctx.fillText(String(d.text || '').slice(0, 40), d.x, d.y);
     } else if (d.type === 'fill') {
-      floodFill(ctx, Math.round(d.x), Math.round(d.y), d.color);
+      fillAt(ctx, Math.round(d.x), Math.round(d.y), d.color);
     } else if (d.type === 'rect') {
       ctx.beginPath();
       ctx.strokeStyle = d.color; ctx.lineWidth = d.size; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
@@ -1287,6 +1557,15 @@
       ctx.strokeStyle = d.color; ctx.lineWidth = d.size; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
       ctx.stroke();
     }
+  }
+
+  // The good fill (anti-alias aware, scanline) lives in fill.js; this keeps
+  // working if that file ever fails to load.
+  function fillAt(targetCtx, x, y, hex) {
+    if (window.MiviFill && window.MiviFill.floodFill) {
+      return window.MiviFill.floodFill(targetCtx, x, y, hex, { tolerance: 32 });
+    }
+    return floodFill(targetCtx, x, y, hex);
   }
 
   function floodFill(targetCtx, startX, startY, fillHex) {
@@ -1455,11 +1734,16 @@
       const right = el('span');
       const delta = el('span', 'd' + (s.delta ? '' : ' zero'), s.delta ? `+${s.delta} ` : '+0 ');
       right.appendChild(delta);
-      right.appendChild(el('span', 't', String(s.score)));
+      right.appendChild(el('span', 't', s.score + ' pts'));
       row.appendChild(right);
       scoresBox.appendChild(row);
     });
 
+    // Keep the round's drawing for the end-of-game GIF.
+    if (!p.aborted && snap.word) {
+      gameFrames.push({ dataUrl: snap.dataUrl, word: snap.word, artist: snap.artist });
+      if (gameFrames.length > 40) gameFrames.shift();
+    }
     $('overlay-roundend').style.display = 'flex';
     clearTimeout(showRoundEnd._h);
     showRoundEnd._h = setTimeout(() => hideOverlay('overlay-roundend'), 5600);
@@ -1493,32 +1777,99 @@
     }
   }
 
-  function downloadSnap() {
+  // Rounded rectangle path, with a fallback for older canvas engines.
+  function roundRectPath(c, x, y, w, h, r) {
+    if (c.roundRect) { c.beginPath(); c.roundRect(x, y, w, h, r); return; }
+    c.beginPath();
+    c.moveTo(x + r, y);
+    c.arcTo(x + w, y, x + w, y + h, r);
+    c.arcTo(x + w, y + h, x, y + h, r);
+    c.arcTo(x, y + h, x, y, r);
+    c.arcTo(x, y, x + w, y, r);
+    c.closePath();
+  }
+
+  // The saved PNG is a proper little card: the drawing matted on a dark
+  // board, a gradient rule, then the word, who drew it and how it went.
+  async function downloadSnap() {
     if (!snap) return;
-    const img = new Image();
-    img.onload = () => {
-      const off = document.createElement('canvas');
-      off.width = img.width;
-      off.height = img.height;
-      const c = off.getContext('2d');
-      c.drawImage(img, 0, 0);
-      const bannerH = 110;
-      const y0 = off.height - bannerH;
-      c.fillStyle = 'rgba(20,21,39,0.78)';
-      c.fillRect(0, y0, off.width, bannerH);
-      c.textAlign = 'center';
-      c.fillStyle = '#fff';
-      c.font = 'bold 36px sans-serif';
-      c.fillText(snap.word || '', off.width / 2, y0 + 42);
-      c.font = '20px sans-serif';
-      c.fillStyle = '#b9b3f5';
-      c.fillText(`drawn by ${snap.artist} · ${snap.guessedCount}/${snap.playerCount} guessed it`, off.width / 2, y0 + 78);
-      const a = document.createElement('a');
-      a.href = off.toDataURL('image/png');
-      a.download = (snap.word || 'drawing').replace(/[^a-zA-Z0-9 ]/g, '-').trim() + '.png';
-      a.click();
-    };
-    img.src = snap.dataUrl;
+    let img;
+    try { img = await loadImage(snap.dataUrl); } catch (e) { toast('❌ ' + e.message); return; }
+    const logo = await loadLogo();
+
+    const PAD = 30, FOOT = 148, RULE = 5;
+    const W = img.width + PAD * 2;
+    const H = img.height + PAD + RULE + FOOT;
+    const off = document.createElement('canvas');
+    off.width = W;
+    off.height = H;
+    const c = off.getContext('2d');
+
+    // Board.
+    c.fillStyle = '#16172C';
+    c.fillRect(0, 0, W, H);
+
+    // The drawing, matted with rounded corners and a soft shadow.
+    c.save();
+    c.shadowColor = 'rgba(0,0,0,0.45)';
+    c.shadowBlur = 22;
+    c.shadowOffsetY = 6;
+    roundRectPath(c, PAD, PAD, img.width, img.height, 16);
+    c.fillStyle = '#ffffff';
+    c.fill();
+    c.restore();
+    c.save();
+    roundRectPath(c, PAD, PAD, img.width, img.height, 16);
+    c.clip();
+    c.drawImage(img, PAD, PAD);
+    c.restore();
+
+    // Gradient rule under the art.
+    const ruleY = PAD + img.height + 22;
+    const grad = c.createLinearGradient(PAD, 0, W - PAD, 0);
+    grad.addColorStop(0, '#6C5CE7');
+    grad.addColorStop(1, '#FD79A8');
+    c.fillStyle = grad;
+    roundRectPath(c, PAD, ruleY, W - PAD * 2, RULE, RULE / 2);
+    c.fill();
+
+    // Footer: mark, the word, who drew it — then the round's stats on the right.
+    const textX = PAD + (logo ? 76 : 0);
+    const baseY = ruleY + 54;
+    if (logo) c.drawImage(logo, PAD, baseY - 30, 60, 60);
+
+    c.textBaseline = 'middle';
+    c.textAlign = 'left';
+    c.fillStyle = '#FFFFFF';
+    c.font = "800 40px 'Plus Jakarta Sans', system-ui, sans-serif";
+    const word = String(snap.word || '');
+    // Shrink the word until it clears the stats column.
+    let size = 40;
+    const room = W - textX - PAD - 190;
+    while (size > 20 && c.measureText(word).width > room) {
+      size -= 2;
+      c.font = `800 ${size}px 'Plus Jakarta Sans', system-ui, sans-serif`;
+    }
+    c.fillText(word, textX, baseY);
+    c.fillStyle = '#9A9DBF';
+    c.font = "600 19px 'Plus Jakarta Sans', system-ui, sans-serif";
+    c.fillText('drawn by ' + String(snap.artist || 'someone'), textX, baseY + 34);
+
+    c.textAlign = 'right';
+    c.fillStyle = '#B9B3F5';
+    c.font = "800 24px 'Plus Jakarta Sans', system-ui, sans-serif";
+    c.fillText(`${snap.guessedCount}/${snap.playerCount} guessed it`, W - PAD, baseY - 6);
+    c.fillStyle = '#6C6F91';
+    c.font = "700 17px 'Plus Jakarta Sans', system-ui, sans-serif";
+    const likes = snap.likes ? `❤️ ${snap.likes}   ·   ` : '';
+    c.fillText(likes + 'Mivimoose Draw', W - PAD, baseY + 30);
+
+    const a = document.createElement('a');
+    a.href = off.toDataURL('image/png');
+    a.download = (snap.word || 'drawing').replace(/[^a-zA-Z0-9 ]/g, '-').trim() + '.png';
+    a.click();
+    sfx('save');
+    toast('⬇️ Saved to your downloads');
   }
 
   let geTimer = null;
@@ -1550,6 +1901,11 @@
       list.appendChild(row);
     });
     $('btn-skip-lobby').style.display = (gameState && gameState.host === myId && !gameState.managed) ? 'inline-block' : 'none';
+    const gifBtn = $('btn-gif');
+    gifBtn.style.display = (gameFrames.length && window.MiviGIF) ? 'inline-block' : 'none';
+    gifBtn.disabled = false;
+    gifBtn.textContent = `🎬 Save all ${gameFrames.length} drawings as a GIF`;
+    $('gif-progress').style.display = 'none';
     let count = 12;
     $('ge-count').textContent = count;
     clearInterval(geTimer);
@@ -1589,6 +1945,107 @@
       exitFocusMode();
     }
     socket.emit('joinRoom', { code, name: ensureName(), avatar: myAvatar() });
+  }
+
+  // ── Whole-game GIF ──
+  // Each round's drawing gets a caption strip and the Mivimoose mark, then
+  // the frames are encoded to an animated GIF in the browser.
+  const GIF_W = 640, GIF_H = 520;
+
+  function loadLogo() {
+    return new Promise((resolve) => {
+      const link = document.querySelector('link[rel="icon"]');
+      if (!link) return resolve(null);
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = () => resolve(null);
+      img.src = link.href;
+    });
+  }
+
+  function loadImage(src) {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = () => reject(new Error('Could not read a drawing.'));
+      img.src = src;
+    });
+  }
+
+  async function buildGifFrames() {
+    const logo = await loadLogo();
+    const frames = [];
+    for (const f of gameFrames) {
+      const img = await loadImage(f.dataUrl);
+      const cv = document.createElement('canvas');
+      cv.width = GIF_W;
+      cv.height = GIF_H;
+      const c = cv.getContext('2d');
+      c.fillStyle = '#ffffff';
+      c.fillRect(0, 0, GIF_W, GIF_H);
+      // The drawing, letterboxed into the top area.
+      const artH = GIF_H - 80;
+      const scale = Math.min(GIF_W / img.width, artH / img.height);
+      const w = Math.round(img.width * scale);
+      const h = Math.round(img.height * scale);
+      c.drawImage(img, Math.round((GIF_W - w) / 2), Math.round((artH - h) / 2), w, h);
+      // Caption strip.
+      c.fillStyle = '#1D1F3A';
+      c.fillRect(0, GIF_H - 80, GIF_W, 80);
+      c.textBaseline = 'middle';
+      c.textAlign = 'left';
+      c.fillStyle = '#ffffff';
+      c.font = "800 30px 'Plus Jakarta Sans', system-ui, sans-serif";
+      c.fillText(String(f.word).slice(0, 26), 84, GIF_H - 50);
+      c.fillStyle = '#B9B3F5';
+      c.font = "600 18px 'Plus Jakarta Sans', system-ui, sans-serif";
+      c.fillText('drawn by ' + String(f.artist).slice(0, 30), 84, GIF_H - 24);
+      if (logo) c.drawImage(logo, 16, GIF_H - 68, 56, 56);
+      c.textAlign = 'right';
+      c.fillStyle = '#6C6F91';
+      c.font = "700 15px 'Plus Jakarta Sans', system-ui, sans-serif";
+      c.fillText('Mivimoose Draw', GIF_W - 18, GIF_H - 34);
+      frames.push(cv);
+    }
+    return frames;
+  }
+
+  async function exportGameGif() {
+    if (!gameFrames.length) return;
+    if (!window.MiviGIF) { toast("The GIF maker didn't load — try a refresh."); return; }
+    const btn = $('btn-gif');
+    const prog = $('gif-progress');
+    const fill = $('gif-bar-fill');
+    btn.disabled = true;
+    prog.style.display = 'flex';
+    fill.style.width = '0%';
+    $('gif-status').textContent = 'Collecting drawings…';
+    try {
+      const frames = await buildGifFrames();
+      $('gif-status').textContent = 'Encoding…';
+      const blob = await window.MiviGIF.encode(frames, {
+        width: GIF_W,
+        height: GIF_H,
+        delay: 250,
+        repeat: 0,
+        onProgress: (f) => {
+          fill.style.width = Math.round(f * 100) + '%';
+          $('gif-status').textContent = 'Encoding… ' + Math.round(f * 100) + '%';
+        },
+      });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'mivimoose-game.gif';
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+      $('gif-status').textContent = 'Saved!';
+      fill.style.width = '100%';
+      sfx('save');
+    } catch (e) {
+      $('gif-status').textContent = 'That did not work: ' + e.message;
+    } finally {
+      btn.disabled = false;
+    }
   }
 
   // ── Confetti ──
@@ -1669,12 +2126,61 @@
   }
 
   // ── Settings ──
-  function applyTheme(theme) {
-    if (theme === 'dark') document.documentElement.setAttribute('data-theme', 'dark');
-    else document.documentElement.removeAttribute('data-theme');
-    API.lsSet('mivi_theme', theme);
-    $('btn-theme').textContent = theme === 'dark' ? '☀️' : '🌙';
-    document.querySelectorAll('#seg-theme .seg-btn').forEach(b => b.classList.toggle('active', b.dataset.themeOpt === theme));
+  // Themes, in the order the theme button cycles through them.
+  // 'midnight' is the default and lives on :root (no data-theme attribute).
+  const THEMES = [
+    { id: 'midnight', name: 'Midnight',  emoji: '🌙', dot: '#6C5CE7' },
+    { id: 'ocean',    name: 'Ocean',     emoji: '🌊', dot: '#1E7FC2' },
+    { id: 'forest',   name: 'Forest',    emoji: '🌲', dot: '#24814F' },
+    { id: 'sunset',   name: 'Sunset',    emoji: '🌇', dot: '#D9457C' },
+    { id: 'noir',     name: 'Noir',      emoji: '🖤', dot: '#55565E' },
+    { id: 'light',    name: 'Daylight',  emoji: '☀️', dot: '#F1F2F9' },
+    { id: 'candy',    name: 'Candy',     emoji: '🍬', dot: '#EC4899' },
+    { id: 'sepia',    name: 'Parchment', emoji: '📜', dot: '#B45309' },
+  ];
+  const DEFAULT_THEME = 'midnight';
+
+  function themeById(id) {
+    return THEMES.find(t => t.id === id) || THEMES[0];
+  }
+
+  function currentTheme() {
+    return document.documentElement.getAttribute('data-theme') || DEFAULT_THEME;
+  }
+
+  function applyTheme(id, opts) {
+    const t = themeById(id);
+    if (t.id === DEFAULT_THEME) document.documentElement.removeAttribute('data-theme');
+    else document.documentElement.setAttribute('data-theme', t.id);
+    API.lsSet('mivi_theme', t.id);
+
+    const next = THEMES[(THEMES.indexOf(t) + 1) % THEMES.length];
+    const btn = $('btn-theme');
+    btn.textContent = t.emoji;
+    btn.title = `Theme: ${t.name} — click for ${next.name}`;
+    document.querySelectorAll('#theme-grid .theme-chip').forEach(c => c.classList.toggle('active', c.dataset.theme === t.id));
+    if (opts && opts.announce) toast(`${t.emoji} ${t.name}`);
+  }
+
+  function cycleTheme() {
+    const i = THEMES.indexOf(themeById(currentTheme()));
+    applyTheme(THEMES[(i + 1) % THEMES.length].id, { announce: true });
+    sfx('click');
+  }
+
+  function buildThemePicker() {
+    const grid = $('theme-grid');
+    grid.textContent = '';
+    for (const t of THEMES) {
+      const chip = el('button', 'theme-chip');
+      chip.dataset.theme = t.id;
+      const dot = el('span', 'theme-dot');
+      dot.style.background = t.dot;
+      chip.appendChild(dot);
+      chip.appendChild(el('span', null, t.name));
+      chip.addEventListener('click', () => { applyTheme(t.id); sfx('click'); });
+      grid.appendChild(chip);
+    }
   }
 
   function applyScale(v) {
@@ -1773,6 +2279,15 @@
         row.appendChild(use);
       }
       if (l.mine) {
+        const ren = el('button', null, '✏️');
+        ren.title = 'Rename this list';
+        ren.onclick = async () => {
+          const name = prompt('New name for this list:', l.name);
+          if (name === null) return;
+          try { await API.libraryRename(l.id, name.trim()); toast('✏️ Renamed'); refreshLibrary(); }
+          catch (e) { toast('❌ ' + e.message); }
+        };
+        row.appendChild(ren);
         const del = el('button', null, '🗑️');
         del.title = 'Take it down';
         del.onclick = async () => {
@@ -1787,6 +2302,32 @@
 
   function libWords() {
     return $('lib-words').value.split(/[\n,]+/).map(w => w.trim()).filter(Boolean);
+  }
+
+  // Share every .txt in a folder as its own list. The file name becomes the
+  // list name; anything empty or rejected is reported at the end.
+  async function uploadFolder(fileList) {
+    const files = Array.from(fileList || []).filter(f => /\.txt$/i.test(f.name));
+    if (!files.length) { toast('No .txt files in there.'); return; }
+    if (!window.MiviAccount.isLoggedIn()) { showLibTab('upload'); return; }
+    if (files.length > 40) { toast('That is a lot — 40 lists at a time, max.'); return; }
+    const note = $('lib-count-note');
+    let done = 0, skipped = 0, cleaned = 0;
+    for (const file of files) {
+      note.textContent = `Sharing ${done + skipped + 1} of ${files.length}…`;
+      const text = await file.text().catch(() => '');
+      const words = text.split(/[\n,]+/).map(w => w.trim()).filter(Boolean);
+      const name = file.name.replace(/\.txt$/i, '').slice(0, 40).trim() || 'Imported list';
+      if (!words.length) { skipped++; continue; }
+      try {
+        const res = await API.libraryUpload({ name, words });
+        cleaned += res.removedBySwearFilter || 0;
+        done++;
+      } catch (e) { skipped++; }
+    }
+    note.textContent = '';
+    toast(`📁 Shared ${done} list${done === 1 ? '' : 's'}${skipped ? `, skipped ${skipped}` : ''}${cleaned ? `, filtered ${cleaned} word${cleaned === 1 ? '' : 's'}` : ''}`);
+    refreshLibrary();
   }
 
   async function uploadToLibrary() {
@@ -1821,7 +2362,10 @@
   // ── Boot ──
   document.addEventListener('DOMContentLoaded', async () => {
     // Restore prefs.
-    applyTheme(API.lsGet('mivi_theme') || 'light');
+    buildThemePicker();
+    // 'dark' was the old id for what is now Midnight.
+    const savedTheme = API.lsGet('mivi_theme');
+    applyTheme(savedTheme === 'dark' ? 'midnight' : (savedTheme || DEFAULT_THEME));
     const scale = parseInt(API.lsGet('mivi_scale'), 10);
     if (scale) { $('set-scale').value = scale; applyScale(scale); }
     $('home-name').value = API.lsGet('mivi_name') || '';
@@ -1944,6 +2488,7 @@
       const input = $('opt-' + key);
       if (!input) continue;
       input.addEventListener('input', () => {
+        markUiBusy();
         const v = parseInt(input.value, 10); // capture now — a stateUpdate echo may rewrite input.value
         $('opt-' + key + '-val').textContent = optLabel(key, v);
         clearTimeout(input._h);
@@ -1976,7 +2521,11 @@
       $('btn-re-like').classList.add('used');
       socket.emit('likeRound');
     });
-    $('btn-voteskip').addEventListener('click', () => { voteSkipUsed = true; updateLikeSkipUI(); socket.emit('voteSkip'); });
+    $('btn-voteskip').addEventListener('click', () => {
+      if (gameState && gameState.managed) { voteSkipUsed = true; updateLikeSkipUI(); }
+      socket.emit('voteSkip');
+    });
+    $('tool-scene').addEventListener('click', openScenePicker);
     $('btn-re-download').addEventListener('click', downloadSnap);
     $('btn-re-save').addEventListener('click', () => saveSnapToGallery(false));
     $('btn-skip-lobby').addEventListener('click', () => socket.emit('skipToLobby'));
@@ -2010,9 +2559,7 @@
     });
 
     // ── Topbar buttons ──
-    $('btn-theme').addEventListener('click', () => {
-      applyTheme(document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark');
-    });
+    $('btn-theme').addEventListener('click', cycleTheme);
     $('btn-music').addEventListener('click', () => {
       Audio.init();
       const st = Audio.getState();
@@ -2021,9 +2568,6 @@
       syncAudioUI();
     });
     $('btn-settings').addEventListener('click', () => { syncAudioUI(); $('modal-settings').style.display = 'flex'; });
-    document.querySelectorAll('#seg-theme .seg-btn').forEach(b => {
-      b.addEventListener('click', () => applyTheme(b.dataset.themeOpt));
-    });
     $('set-music-on').addEventListener('change', e => { Audio.init(); Audio.setMusicEnabled(e.target.checked); if (e.target.checked) Audio.startMusic(); syncAudioUI(); });
     $('set-sfx-on').addEventListener('change', e => { Audio.setSfxEnabled(e.target.checked); });
     $('set-music-vol').addEventListener('input', e => Audio.setMusicVolume(e.target.value / 100));
@@ -2044,6 +2588,18 @@
     $('btn-lobby-library').addEventListener('click', openLibrary);
     document.querySelectorAll('#modal-library .tab').forEach(t => t.addEventListener('click', () => showLibTab(t.dataset.libtab)));
     $('btn-lib-upload').addEventListener('click', uploadToLibrary);
+    $('btn-lib-new').addEventListener('click', () => showLibTab('upload'));
+    const pickFolder = () => {
+      if (!window.MiviAccount.isLoggedIn()) { showLibTab('upload'); return; }
+      $('lib-folder-input').click();
+    };
+    $('btn-lib-folder').addEventListener('click', pickFolder);
+    $('btn-lib-folder2').addEventListener('click', pickFolder);
+    $('lib-folder-input').addEventListener('change', (e) => {
+      const files = e.target.files;
+      e.target.value = '';
+      uploadFolder(files);
+    });
     $('lib-words').addEventListener('input', () => { $('lib-count').textContent = libWords().length + ' words'; });
     $('btn-lib-import').addEventListener('click', () => $('lib-file').click());
     $('lib-file').addEventListener('change', (e) => {
@@ -2065,6 +2621,16 @@
 
     buildOptionHelp();
     gateComboLock();
+    $('btn-leave').addEventListener('click', () => {
+      if (!roomCode) return;
+      if (gameState && gameState.state !== 'lobby' && !confirm('Leave the game?')) return;
+      sfx('click');
+      leaveToHome();
+    });
+    $('btn-gif').addEventListener('click', exportGameGif);
+    $('opt-canvasBackground').addEventListener('change', (e) => {
+      socket.emit('setGameOptions', { options: { canvasBackground: e.target.value } });
+    });
     window.addEventListener('resize', () => requestAnimationFrame(fitCanvas));
     $('btn-lobby-friends').addEventListener('click', () => window.MiviAccount.openAccount('friends'));
     $('invite-join').addEventListener('click', acceptInvite);

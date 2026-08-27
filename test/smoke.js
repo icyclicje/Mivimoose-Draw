@@ -145,7 +145,7 @@ async function main() {
     check('only the Classic list ships', created.state.wordLists.available.filter(l => !l.custom).length === 1 && created.state.wordLists.available[0].label === 'Classic');
     const dflt = created.state.options;
     check('new defaults (10 rounds · 90s · 5 words · 5 hints · 10 players · easy)',
-      dflt.rounds === 10 && dflt.roundTime === 90 && dflt.wordChoices === 5 && dflt.hintCount === 5 && dflt.maxPlayers === 10 && dflt.autocorrectStrength === 1 && dflt.textTool === false && dflt.avoidRepeats === true,
+      dflt.rounds === 10 && dflt.roundTime === 90 && dflt.wordChoices === 5 && dflt.hintCount === 5 && dflt.maxPlayers === 10 && dflt.autocorrectStrength === 1 && dflt.textTool === false && dflt.avoidRepeats === true && dflt.canvasBackground === 'plain' && dflt.sceneBackgrounds === false,
       JSON.stringify(dflt));
     const code = created.code;
 
@@ -482,6 +482,102 @@ async function main() {
     check('draw batches relayed', Array.isArray(batch) && batch.length === 2);
     HOST.disconnect(); FR.disconnect();
 
+    // ═══ 7d2. Renaming a room's custom list ═══
+    console.log('— list rename —');
+    const RN = connect({ guestKey: '9'.repeat(32), name: 'Renamer' });
+    await once(RN, 'welcome');
+    p = once(RN, 'roomCreated'); RN.emit('createRoom', { name: 'Renamer' }); const roomRN = (await p).code;
+    p = once(RN, 'customListAdded'); RN.emit('addCustomList', { name: 'Old name', text: 'apple\npear' }); await p;
+    p = once(RN, 'stateUpdate');
+    RN.emit('setWordLists', { lists: ['Old name'], weights: { 'Old name': 7 } });
+    await p;
+    const renP = once(RN, 'customListRenamed');
+    const stRn = once(RN, 'stateUpdate');
+    RN.emit('renameCustomList', { name: 'Old name', newName: 'Fresh name' });
+    const ren = await renP;
+    const afterRn = await stRn;
+    check('custom list renamed', ren.to === 'Fresh name' && afterRn.wordLists.available.some(l => l.name === 'Fresh name'));
+    check('rename keeps it selected', afterRn.wordLists.selected.includes('Fresh name') && !afterRn.wordLists.selected.includes('Old name'));
+    check('rename keeps its weight', afterRn.wordLists.weights['Fresh name'] === 7, JSON.stringify(afterRn.wordLists.weights));
+    // Removing a list falls back to Classic rather than leaving nothing.
+    p = once(RN, 'customListRemoved');
+    const stRm = once(RN, 'stateUpdate');
+    RN.emit('removeCustomList', { name: 'Fresh name' });
+    await p;
+    const afterRm = await stRm;
+    check('custom list removed', !afterRm.wordLists.available.some(l => l.name === 'Fresh name'));
+    check('removal never leaves the room list-less', afterRm.wordLists.selected.length >= 1 && afterRm.wordLists.selected.includes('classic'), JSON.stringify(afterRm.wordLists.selected));
+    p = once(RN, 'customListAdded'); RN.emit('addCustomList', { name: 'Fresh name', text: 'apple\npear' }); await p;
+
+    const errRn = once(RN, 'error');
+    RN.emit('renameCustomList', { name: 'Fresh name', newName: 'classic' });
+    check('rename onto an existing list refused', /already a list/i.test((await errRn).message));
+
+    // Canvas paper option
+    p = once(RN, 'stateUpdate');
+    RN.emit('setGameOptions', { options: { canvasBackground: 'grid' } });
+    check('canvas paper set', (await p).options.canvasBackground === 'grid');
+    p = once(RN, 'stateUpdate');
+    RN.emit('setGameOptions', { options: { canvasBackground: 'nonsense' } });
+    check('bogus canvas paper ignored', (await p).options.canvasBackground === 'grid');
+    RN.disconnect();
+
+    // ═══ 7d3. Scene backdrops + host-only skip ═══
+    console.log('— backdrops & skip —');
+    const SC = connect({ guestKey: 'a'.repeat(31) + 'b', name: 'Scener' });
+    await once(SC, 'welcome');
+    p = once(SC, 'roomCreated'); SC.emit('createRoom', { name: 'Scener' }); const roomSC = (await p).code;
+    const SG = connect({ guestKey: 'a'.repeat(31) + 'c', name: 'Watcher' });
+    await once(SG, 'welcome');
+    p = once(SG, 'roomJoined'); SG.emit('joinRoom', { code: roomSC }); await p;
+    p = once(SC, 'stateUpdate');
+    SC.emit('setGameOptions', { options: { rounds: 2, roundTime: 60, sceneBackgrounds: true } });
+    check('scene backdrops toggled on', (await p).options.sceneBackgrounds === true);
+
+    let wcSC = once(SC, 'wordChoices');
+    SC.emit('startGame');
+    let dsSG = once(SG, 'drawingStart');
+    SC.emit('chooseWord', { word: (await wcSC).words[0] });
+    check('round starts with no backdrop', (await dsSG).scene === null);
+
+    // A guesser cannot set the backdrop; the artist can.
+    let stray = false;
+    const straySpy = () => { stray = true; };
+    SC.on('sceneSet', straySpy);
+    SG.emit('setScene', { id: 'city' });
+    await sleep(300);
+    SC.off('sceneSet', straySpy);
+    check('non-artist cannot set a backdrop', !stray);
+
+    let sceneP = once(SG, 'sceneSet');
+    SC.emit('setScene', { id: 'city' });
+    check('artist sets a backdrop for everyone', (await sceneP).id === 'city');
+
+    let bogus = false;
+    const bogusSpy = () => { bogus = true; };
+    SG.on('sceneSet', bogusSpy);
+    SC.emit('setScene', { id: 'not-a-real-scene' });
+    await sleep(300);
+    SG.off('sceneSet', bogusSpy);
+    check('unknown backdrop id ignored', !bogus);
+
+    r = await rest('GET', '/rooms');
+    // Skip: the guesser is not host, so they are refused…
+    const skipErr = once(SG, 'error');
+    SG.emit('voteSkip');
+    check('non-host cannot skip', /only the host/i.test((await skipErr).message));
+    // …and the host can skip even though the host is the one drawing.
+    const reSkip = once(SG, 'roundEnd');
+    SC.emit('voteSkip');
+    await reSkip;
+    check('host skips the round they are drawing', true);
+
+    // Backdrop resets when the next round starts.
+    wcSC = once(SG, 'wordChoices', 15000);
+    const rsNext = await once(SG, 'roundStart', 15000);
+    check('backdrop cleared for the next round', rsNext.scene === null || rsNext.scene === undefined);
+    SC.disconnect(); SG.disconnect();
+
     // ═══ 7e. Avoid repeats never strands a tiny list ═══
     console.log('— avoid repeats —');
     const H4 = connect({ guestKey: '7'.repeat(32), name: 'Tiny' });
@@ -510,6 +606,37 @@ async function main() {
     check('round 2 still gets a full set from a 3-word list', second.length === 3, JSON.stringify(second));
     check('unused words come back before the drawn one', others.every(w => second.includes(w)) && second.filter(w => w === first[0]).length === 1, JSON.stringify(second));
     H4.disconnect(); G4.disconnect();
+
+    // ═══ 7f. Hint picker spreads letters sensibly ═══
+    console.log('— hints —');
+    {
+      const hints = require('../lib/hints');
+      let spreadOk = true, halfOk = true, validOk = true, varied = new Set();
+      for (let i = 0; i < 200; i++) {
+        const word = ['ice cream', 'boat+coat', 'traffic light', 'a b', 'x'][i % 5];
+        const revealed = [];
+        for (let step = 0; step < 4; step++) {
+          const picked = hints.pickHintIndices(word, revealed, 1);
+          for (const idx of picked) {
+            if (revealed.includes(idx) || word[idx] === ' ' || word[idx] === '+') validOk = false;
+          }
+          revealed.push(...picked);
+        }
+        const parts = word.split(/[ +]/).filter(Boolean);
+        const masked = hints.maskWord(word, revealed);
+        const mparts = masked.split(/[ +]/).filter(Boolean);
+        mparts.forEach((mp, pi) => {
+          const shown = mp.split('').filter(c => c !== '_').length;
+          if (shown > Math.max(1, Math.floor(parts[pi].length / 2))) halfOk = false;
+          if (shown === parts[pi].length && parts[pi].length > 1 && mparts.some(o => !o.split('').some(c => c !== '_'))) spreadOk = false;
+        });
+        if (word === 'ice cream') varied.add(revealed.slice().sort((a, b) => a - b).join(','));
+      }
+      check('hints only ever reveal real, unrevealed letters', validOk);
+      check('hints never exceed half of a word', halfOk);
+      check('hints never finish one word while another is blank', spreadOk);
+      check('hints are not identical every game', varied.size > 1, 'variants=' + varied.size);
+    }
 
     // ═══ 8. Combo lock: full answer accepted after locking a part ═══
     console.log('— combo lock —');
