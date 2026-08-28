@@ -63,7 +63,7 @@ Three things to set on the Railway service:
 
 Guessers get 250–500 points depending on how much time is left, minus a little for each person who beat them to it. The artist gets paid once, at the end of the round, in proportion to how many people guessed — up to 350, plus 50 if everyone got it.
 
-After each correct guess the clock gets capped based on how many guessers are still working: in a 4-guesser 90s round the first correct guess caps it at 49s, then 35s, then 22s, and the last person always keeps at least 12 seconds.
+After each correct guess the cock gets capped based on how many guessers are still working: in a 4-guesser 90s round the first correct guess caps it at 49s, then 35s, then 22s, and the last person always keeps at least 12 seconds.
 
 ## Project layout
 
