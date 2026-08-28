@@ -48,10 +48,15 @@ but they have bracketed placeholders (operator name, contact address,
 jurisdiction) you must fill in, and they are **not legal advice** — get them
 reviewed before relying on them.
 
-The server publishes both at `/docs/PRIVACY.md` and `/docs/TERMS.md`, and the
-home screen links to them. Discord's Developer Portal asks for a Terms of Service
-URL and a Privacy Policy URL under **General Information** — point those at
-`https://yourgame.example/docs/TERMS.md` and `.../docs/PRIVACY.md`.
+The markdown files are the source of truth; the server renders them into the
+site's own styling and serves them at **`/privacy`** and **`/terms`** (edit the
+`.md`, reload the page — no build step). They're deliberately unobtrusive: a
+small line at the bottom of the home screen opens them in-app, and nothing else
+links to them.
+
+Discord's Developer Portal asks for a Terms of Service URL and a Privacy Policy
+URL under **General Information** — point those at
+`https://yourgame.example/terms` and `https://yourgame.example/privacy`.
 
 ## Deploying it (Railway)
 

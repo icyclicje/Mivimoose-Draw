@@ -36,6 +36,7 @@
   let activityCtx = null;          // { instanceId, channelId, guildId, … }
   let presenceAllowed = false;     // did Discord grant rpc.activities.write?
   let presenceStartedAt = 0;       // when this player joined, for the presence timer
+  let activityClientId = null;     // needed to retry sign-in from the account modal
   let uiBusyUntil = 0;             // don't rebuild lobby panels while they're being used
 
   // Skip expensive re-renders for a moment after the host touches a control.
@@ -269,13 +270,9 @@
       if (pendingJoin) {
         const code = pendingJoin; pendingJoin = null;
         socket.emit('joinRoom', { code, name: ensureName(), avatar: myAvatar() });
-      } else if (activityMode && activityCtx && activityCtx.instanceId && !roomCode) {
-        // Everyone who launched this activity in the same channel shares one room.
-        socket.emit('joinActivity', {
-          instanceId: activityCtx.instanceId,
-          name: ensureName(),
-          avatar: myAvatar(),
-        });
+      } else if (activityMode && !roomCode) {
+        // Deliberately nothing: the activity opens on the home screen so the
+        // player can pick the channel game, a public match, or their own room.
       } else {
         const target = roomCode || API.lsGet('mivi_room');
         if (target) socket.emit('joinRoom', { code: target, name: myName() || 'Player', avatar: myAvatar(), quiet: true });
@@ -755,9 +752,31 @@
   }
 
   // ── Home / public rooms ──
+  // "24 people playing in 6 rooms" — counts every room, listed or not.
+  function renderOnlineTotals(totals) {
+    const strip = $('online-strip');
+    if (!strip) return;
+    const box = $('online-text');
+    const people = (totals && totals.players) || 0;
+    strip.style.display = 'inline-flex';
+    strip.classList.toggle('quiet', people === 0);
+    box.textContent = '';
+    if (!people) {
+      box.textContent = 'Nobody playing yet — start one';
+      return;
+    }
+    // One number, said plainly. The room browser below has the detail.
+    const n = document.createElement('b');
+    n.textContent = String(people);
+    box.appendChild(n);
+    box.appendChild(document.createTextNode(people === 1 ? ' person playing' : ' people playing'));
+    strip.title = (totals.rooms || 0) + (totals.rooms === 1 ? ' room' : ' rooms')
+      + (totals.playing ? ' · ' + totals.playing + ' mid-game' : '');
+  }
   async function fetchRooms() {
     try {
       const data = await API.publicRooms();
+      renderOnlineTotals(data.totals);
       const list = $('rooms-list');
       list.textContent = '';
       if (!data.rooms.length) {
@@ -2404,6 +2423,73 @@
   // ── Discord Activity ──
   // Everything here is a no-op on the normal website; the whole block only
   // wakes up when the page is running inside Discord.
+  // Sign the player in as their Discord account, from inside the iframe.
+  //
+  // Two things to know about authorize(): it RESOLVES with an empty code
+  // rather than rejecting when Discord declines, and asking for a scope the
+  // app is not approved for takes the whole request down with it. So we try
+  // the richest scope set first and step down, treating "no code" as failure.
+  async function activitySignIn() {
+    const D = window.MiviDiscord;
+    if (!D || !D.isActivity() || !activityClientId) return false;
+
+    const scopeSets = [
+      ['identify', 'guilds', 'rpc.activities.write'],  // …with rich presence
+      ['identify', 'guilds'],                          // …without it
+      ['identify'],                                    // …bare minimum
+    ];
+    // 'none' asks Discord to do it silently, which only works for a player who
+    // has authorised this app before. The first time round that comes back
+    // empty, so we ask again and let Discord show its consent screen.
+    const prompts = ['none', 'consent'];
+    let code = '';
+    let granted = null;
+    outer:
+    for (const promptMode of prompts) {
+      for (const scopes of scopeSets) {
+        try {
+          const res = await D.authorize(scopes, { prompt: promptMode });
+          if (res && res.code) { code = res.code; granted = scopes; break outer; }
+        } catch (e) {
+          if (window.MIVI_DISCORD_DEBUG) console.warn('authorize failed', promptMode, scopes, e);
+        }
+      }
+    }
+    if (!code) return false;
+
+    presenceAllowed = granted.indexOf('rpc.activities.write') !== -1;
+    const data = await API.activityLogin(code);
+    API.setToken(data.token);
+    try { await D.authenticate(data.accessToken); } catch (e) {}
+
+    if (data.user) {
+      if (data.user.username) {
+        API.lsSet('mivi_name', data.user.username);
+        $('home-name').value = data.user.username;
+      }
+      // Their Discord picture comes back with the account; the server is the
+      // one that hands it to everybody else in a room.
+      if (data.user.avatarUrl) API.lsSet('mivi_avatar_url', data.user.avatarUrl);
+    }
+    await window.MiviAccount.init();      // repaint the account chip
+    return true;
+  }
+
+  // Called by the account modal when someone taps "Continue with Discord"
+  // inside the activity — the redirect flow cannot work in an iframe.
+  async function retryActivitySignIn() {
+    $('modal-auth').style.display = 'none';
+    try {
+      const ok = await activitySignIn();
+      if (!ok) { toast('Discord would not sign you in — you can still play as a guest.'); return; }
+      toast('👋 Signed in as ' + (window.MiviAccount.user()?.username || 'you'));
+      // Pick the new token up on the socket, unless we are mid-game.
+      if (!roomCode) connectSocket();
+    } catch (e) {
+      toast('❌ ' + (e.message || 'Sign-in failed.'));
+    }
+  }
+
   async function bootActivity() {
     const D = window.MiviDiscord;
     if (!D || !D.isActivity()) return false;
@@ -2417,6 +2503,7 @@
       return false;
     }
 
+    activityClientId = cfg.clientId;
     const started = await D.init(cfg.clientId);
     if (!started || !started.ok) {
       toast('Could not talk to Discord — playing as a guest.');
@@ -2425,30 +2512,14 @@
     activityCtx = D.context();
     presenceStartedAt = Date.now();
 
-    // Sign the player in as their Discord account. If it fails they simply
-    // continue as a guest rather than getting stuck on an error.
+    // Sign them in automatically. If Discord refuses, they carry on as a
+    // guest and can retry from the account button — no dead end.
     try {
-      // rpc.activities.write is what lets us set rich presence. It has
-      // historically been a gated scope, so if Discord refuses it we fall
-      // back to the plain scopes rather than losing sign-in altogether.
-      let code;
-      try {
-        code = (await D.authorize(['identify', 'guilds', 'rpc.activities.write'])).code;
-        presenceAllowed = true;
-      } catch (scopeErr) {
-        code = (await D.authorize(['identify', 'guilds'])).code;
-        presenceAllowed = false;
-      }
-      if (!code) throw new Error('no authorization code');
-      const data = await API.activityLogin(code);
-      API.setToken(data.token);
-      try { await D.authenticate(data.accessToken); } catch (e) {}
-      if (data.user && data.user.username) {
-        API.lsSet('mivi_name', data.user.username);
-        $('home-name').value = data.user.username;
-      }
+      const ok = await activitySignIn();
+      if (!ok) toast('Playing as a guest — tap your name to sign in with Discord.');
     } catch (e) {
       if (window.MIVI_DISCORD_DEBUG) console.warn('activity sign-in failed', e);
+      toast('Playing as a guest — tap your name to sign in with Discord.');
     }
 
     // Who else is in the voice channel but not yet in the game?
@@ -2570,6 +2641,25 @@
       name: ensureName(),
       avatar: myAvatar(),
     });
+  }
+
+  // ── Policy / terms reader ──
+  // Tucked away: a small line at the bottom of the home screen and nothing
+  // else, but it opens inside the app rather than throwing you out to a file.
+  async function openLegal(doc) {
+    const modal = $('modal-legal');
+    $('legal-title').textContent = doc === 'terms' ? 'Terms of Service' : 'Privacy Policy';
+    $('legal-body').textContent = 'Loading…';
+    modal.style.display = 'flex';
+    try {
+      const data = await API.legal(doc);
+      $('legal-title').textContent = data.title;
+      // Server-rendered from our own markdown, with everything escaped there.
+      $('legal-body').innerHTML = data.html;
+      $('legal-body').scrollTop = 0;
+    } catch (e) {
+      $('legal-body').textContent = 'Could not load that right now.';
+    }
   }
 
   // ── Confetti ──
@@ -3036,6 +3126,12 @@
       p.style.display = p.style.display === 'none' ? 'block' : 'none';
     });
     $('btn-refresh-rooms').addEventListener('click', fetchRooms);
+    document.querySelectorAll('.home-legal a').forEach(a => {
+      a.addEventListener('click', (e) => {
+        e.preventDefault();
+        openLegal(a.dataset.doc || 'privacy');
+      });
+    });
 
     // ── Wire lobby ──
     $('lobby-code').addEventListener('click', () => {
@@ -3253,6 +3349,8 @@
     $('emoji-search').addEventListener('input', (e) => filterEmoji(e.target.value));
     if (activityMode) {
       $('btn-rejoin-activity').style.display = 'block';
+      $('btn-rejoin-activity').textContent = "🎮 Play with this channel";
+      $('btn-rejoin-activity').classList.add('btn-hero-lite');
       $('btn-rejoin-activity').addEventListener('click', rejoinActivityGame);
       $('btn-activity-custom').addEventListener('click', createCustomFromActivity);
       $('btn-activity-back').addEventListener('click', rejoinActivityGame);
@@ -3278,6 +3376,8 @@
     canAddRoomList: () => !!roomCode && !!gameState && gameState.state === 'lobby' && gameState.host === myId && !gameState.managed,
     addRoomList: (name, text) => { if (socket) socket.emit('addCustomList', { name, text }); },
     inRoom: () => !!roomCode,
+    isActivity: () => activityMode,
+    activitySignIn: retryActivitySignIn,
     inviteFriend: (userId) => { if (socket && roomCode) socket.emit('inviteFriend', { userId }); },
   };
 })();

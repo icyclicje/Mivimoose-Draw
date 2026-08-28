@@ -85,6 +85,9 @@
     <div class="hero">
       <h1 class="hero-title">Draw stuff. <span class="hero-grad">Guess stuff.</span></h1>
       <p class="hero-sub">One of you scribbles, everyone else yells guesses. That's it, that's the game.</p>
+      <p class="online-strip" id="online-strip" style="display:none">
+        <span class="count-dot"></span><span id="online-text"></span>
+      </p>
     </div>
 
     <div class="home-grid">
@@ -133,9 +136,9 @@
 
     <p class="home-foot">Signing in with Discord keeps your word lists, drawings and stats around. Guests can still play everything.</p>
     <p class="home-legal">
-      <a href="/docs/PRIVACY.md" target="_blank" rel="noopener">Privacy</a>
+      <a href="/privacy" data-doc="privacy">Privacy</a>
       <span aria-hidden="true">·</span>
-      <a href="/docs/TERMS.md" target="_blank" rel="noopener">Terms</a>
+      <a href="/terms" data-doc="terms">Terms</a>
     </p>
   </section>
 
@@ -601,6 +604,14 @@ t-shirt</pre>
     <h2>🖼️ Pick a backdrop</h2>
     <p class="modal-sub">Draw on top of it — it saves and shares with your drawing. Picking one clears the canvas, so choose before you start.</p>
     <div class="scene-grid" id="scene-grid"></div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="modal-legal" style="display:none">
+  <div class="modal modal-lg">
+    <button class="modal-x" data-close="modal-legal">✕</button>
+    <h2 id="legal-title">Legal</h2>
+    <div class="legal-doc" id="legal-body"></div>
   </div>
 </div>
 

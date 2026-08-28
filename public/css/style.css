@@ -1242,6 +1242,57 @@ body.in-activity .account-chip { padding: 4px 6px; }
 /* Discord already gives people a way out of the activity. */
 body.in-activity .btn-hero-sub { font-size: 0.74rem; }
 
+/* A quiet line above the play buttons: how busy the game is right now. */
+.online-strip {
+  display: inline-flex; align-items: center; gap: 8px;
+  margin-top: 10px; font-size: 0.85rem; font-weight: 700; color: var(--ink-dim);
+}
+.online-strip b { color: var(--ink); font-weight: 800; }
+.online-strip .count-dot { animation: livePulse 2.4s ease-in-out infinite; }
+.online-strip.quiet { opacity: .75; }
+.online-strip.quiet .count-dot { background: var(--ink-dim); box-shadow: none; animation: none; }
+@keyframes livePulse {
+  0%, 100% { box-shadow: 0 0 0 3px color-mix(in srgb, var(--good) 22%, transparent); }
+  50%      { box-shadow: 0 0 0 6px color-mix(in srgb, var(--good) 6%, transparent); }
+}
+
+/* Rendered policy / terms, both in the modal and on the standalone pages. */
+.legal-doc { font-size: 0.92rem; line-height: 1.65; color: var(--ink); }
+.legal-doc h1 { font-family: 'Fredoka', sans-serif; font-weight: 600; font-size: 1.5rem; margin-bottom: 4px; }
+.legal-doc h2 { font-family: 'Fredoka', sans-serif; font-weight: 600; font-size: 1.12rem; margin: 22px 0 8px; }
+.legal-doc h3 { font-weight: 800; font-size: 0.96rem; margin: 16px 0 6px; }
+.legal-doc p { margin-bottom: 12px; }
+.legal-doc ul, .legal-doc ol { margin: 0 0 12px 22px; }
+.legal-doc li { margin-bottom: 6px; }
+.legal-doc a { color: var(--brand-on-soft); }
+.legal-doc code {
+  background: var(--card-2); border: 1px solid var(--line); border-radius: 6px;
+  padding: 1px 5px; font-size: 0.86em;
+}
+.legal-doc hr { border: none; border-top: 1px solid var(--line); margin: 22px 0; }
+.legal-doc blockquote {
+  background: var(--card-2); border-left: 3px solid var(--yellow);
+  border-radius: 0 10px 10px 0; padding: 12px 16px; margin: 0 0 16px;
+  font-size: 0.88rem; color: var(--ink-dim);
+}
+.legal-doc blockquote p:last-child { margin-bottom: 0; }
+#modal-legal .legal-doc { max-height: 68vh; overflow-y: auto; padding-right: 6px; }
+
+.legal-page { max-width: 780px; margin: 0 auto; padding: 32px 20px 60px; }
+.legal-back { display: inline-block; margin-bottom: 18px; color: var(--ink-dim); font-weight: 700; font-size: 0.85rem; text-decoration: none; }
+.legal-back:hover { color: var(--brand); }
+.legal-foot { margin-top: 28px; font-size: 0.85rem; font-weight: 700; }
+.legal-foot a { color: var(--ink-dim); }
+
+/* The channel-game button on the activity's home screen — prominent, but
+   not competing with the main Play button. */
+.btn-hero-lite {
+  background: var(--grad);
+  box-shadow: 0 5px 0 #4c3fd1, 0 10px 22px rgba(108, 92, 231, .28);
+  font-size: 1rem; padding: 15px 22px;
+}
+.btn-hero-lite:active { box-shadow: 0 2px 0 #4c3fd1; }
+
 /* Theme picker (settings) */
 .theme-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 8px; }
 .theme-chip {

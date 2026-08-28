@@ -81,11 +81,22 @@
   function openAuth() {
     $('auth-discord-form').style.display = discordAvailable ? 'flex' : 'none';
     $('auth-unconfigured').style.display = discordAvailable ? 'none' : 'flex';
+    const inActivity = !!(window.MiviApp && window.MiviApp.isActivity && window.MiviApp.isActivity());
+    $('auth-sub').textContent = inActivity
+      ? 'Use your Discord account — it takes one tap in here.'
+      : 'Your lists, drawings and stats follow your Discord account.';
     $('modal-auth').style.display = 'flex';
   }
 
   function startDiscordLogin() {
     if (!discordAvailable) return;
+    // Inside a Discord Activity the iframe may not navigate itself to
+    // discord.com — that is a cross-origin navigation and the frame just goes
+    // blank. Activities have to use the SDK's own authorize() instead.
+    if (window.MiviApp && window.MiviApp.isActivity && window.MiviApp.isActivity()) {
+      window.MiviApp.activitySignIn();
+      return;
+    }
     // Full-page redirect; we come back on /#authtoken=... (see api.js).
     if (API.beginDiscordLogin) API.beginDiscordLogin();
     else window.location.href = '/api/auth/discord';

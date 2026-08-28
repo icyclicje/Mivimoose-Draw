@@ -912,7 +912,9 @@
 
   function live() { return isActivity() && connected && !!rpcSource; }
 
-  function authorize(scopes) {
+  // opts.prompt lets the caller retry with a visible consent screen when the
+  // silent attempt (the default, prompt:'none') comes back with no code.
+  function authorize(scopes, opts) {
     try {
       if (!live()) return Promise.resolve({ code: '' });
       var list = [];
@@ -923,12 +925,13 @@
       // AUTHORIZE needs the client id again; we kept the one passed to init().
       if (!lastClientId) return Promise.resolve({ code: '' });
 
+      var promptMode = (opts && isStr(opts.prompt)) ? opts.prompt : 'none';
       return sendCommand(CMD_AUTHORIZE, {
         client_id: lastClientId,
         scope: list,
         response_type: 'code',
         state: '',
-        prompt: 'none'
+        prompt: promptMode
       }).then(function (data) {
         var code = (isObject(data) && isStr(data.code)) ? data.code : '';
         return { code: code };

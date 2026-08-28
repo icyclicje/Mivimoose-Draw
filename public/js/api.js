@@ -139,6 +139,7 @@
     deleteDrawing: (id) => req('DELETE', '/drawings/' + id),
 
     publicRooms: () => req('GET', '/rooms'),
+    legal: (doc) => req('GET', '/legal/' + doc),
 
     library: () => req('GET', '/library'),
     libraryList: (id) => req('GET', '/library/' + id),

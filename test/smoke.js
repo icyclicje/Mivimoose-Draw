@@ -905,6 +905,34 @@ async function main() {
     check('a guest-created account has no picture', paState.players[0].avatarUrl === null || typeof paState.players[0].avatarUrl === 'string');
     PA.disconnect();
 
+    // ═══ 7d11c. Legal pages + global player totals ═══
+    console.log('— legal pages & totals —');
+    for (const doc of ['privacy', 'terms']) {
+      const pageRes = await fetch(BASE + '/' + doc);
+      const pageHtml = await pageRes.text();
+      check(doc + ' page renders as html', pageRes.status === 200
+        && (pageRes.headers.get('content-type') || '').includes('text/html')
+        && /<h1>/.test(pageHtml) && pageHtml.includes('style.css'), pageRes.status + ' ' + pageHtml.slice(0, 60));
+      check(doc + ' page escapes raw html', !/<script>alert/i.test(pageHtml));
+      r = await rest('GET', '/legal/' + doc);
+      check(doc + ' available to the in-app reader', r.status === 200 && typeof r.data.html === 'string' && r.data.html.length > 500 && !!r.data.title);
+    }
+    r = await rest('GET', '/legal/nonsense');
+    check('unknown legal doc 404s', r.status === 404);
+
+    // Totals count private rooms too, not just listed ones.
+    r = await rest('GET', '/rooms');
+    const before = r.data.totals.players;
+    check('room totals are reported', typeof before === 'number' && typeof r.data.totals.rooms === 'number', JSON.stringify(r.data.totals));
+    const TA = connect({ guestKey: '8'.repeat(32), name: 'Counted' });
+    await once(TA, 'welcome');
+    p = once(TA, 'roomCreated'); TA.emit('createRoom', { name: 'Counted' }); await p;
+    await sleep(150);
+    r = await rest('GET', '/rooms');
+    check('a private room still counts toward the total', r.data.totals.players === before + 1, before + ' -> ' + r.data.totals.players);
+    check('the private room is not listed publicly', !r.data.rooms.some(x => x.name === 'Counted'));
+    TA.disconnect();
+
     // ═══ 7d12. Host downloads every list as a zip ═══
     console.log('— list zip —');
     const ZH = connect({ guestKey: 'f'.repeat(31) + '1', name: 'Zipper' });

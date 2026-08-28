@@ -12,6 +12,7 @@ const api = require('./lib/api');
 const game = require('./lib/game');
 const config = require('./lib/config');
 const fonts = require('./lib/fonts');
+const legal = require('./lib/legal');
 
 // Discord embeds an Activity in an iframe served from *.discordsays.com, so
 // the anti-framing headers have to make room for it. Everything else stays.
@@ -59,13 +60,17 @@ app.use(express.json({ limit: '8mb' })); // drawings arrive as base64 PNGs
 app.use('/api', api);
 // Static assets: short cache with revalidation, so updates still land quickly.
 app.use(express.static(path.join(__dirname, 'public'), { maxAge: '10m', etag: true }));
-// The privacy policy and terms, so the in-app links (and Discord's Developer
-// Portal fields) can point at a real URL.
-app.use('/docs', express.static(path.join(__dirname, 'docs'), {
-  maxAge: '1h',
-  extensions: ['md'],
-  setHeaders: (res) => res.setHeader('Content-Type', 'text/plain; charset=utf-8'),
-}));
+
+// The policy and terms, rendered into the site's own styling. Real URLs so
+// they can go in Discord's Developer Portal, but nothing links to them from
+// the game except a small line at the bottom of the home screen.
+app.get('/:doc(privacy|terms)', (req, res, next) => {
+  const html = legal.page(req.params.doc);
+  if (!html) return next();
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.setHeader('Cache-Control', 'public, max-age=300');
+  res.send(html);
+});
 
 // Invite links (/?join=CODE) and everything else land on the app.
 app.get('/', (req, res) => {
