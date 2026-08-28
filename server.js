@@ -83,6 +83,12 @@ const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
   console.log(`🎨 Mivimoose Draw running on http://localhost:${PORT}`);
   if (config.activityEnabled) console.log('🎮 Discord Activity support is on — see docs/DISCORD_ACTIVITY.md');
+  if (config.discordConfigured) {
+    // Sign-in fails with 'Invalid OAuth2 redirect_uri' unless this exact
+    // string is listed under OAuth2 → Redirects on the Discord app.
+    console.log('🔑 Discord redirect URI (must be registered verbatim):');
+    console.log('   ' + config.discordRedirectUri);
+  }
   // Pull the font files down once up front so the first player does not wait.
   fonts.warm();
 });
