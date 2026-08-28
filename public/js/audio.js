@@ -434,20 +434,91 @@
   var LOOKAHEAD = 0.2;        // schedule this far ahead (seconds)
   var TIMER_MS = 100;         // scheduler wake-up interval
 
-  // Each bar: bass root, pad chord voicing, melody note pool (MIDI numbers).
-  var PROG = [
-    { root: 41, pad: [53, 57, 60, 64], pool: [65, 67, 69, 72, 74, 76, 77] }, // Fmaj7
-    { root: 45, pad: [57, 60, 64, 67], pool: [64, 67, 69, 72, 74, 76] },     // Am7
-    { root: 38, pad: [50, 53, 57, 60], pool: [62, 65, 69, 72, 74, 77] },     // Dm7
-    { root: 43, pad: [55, 59, 62, 65], pool: [62, 65, 67, 71, 74, 79] },     // G7
-    { root: 41, pad: [53, 57, 60, 64], pool: [65, 67, 69, 72, 74, 76, 77] }, // Fmaj7
-    { root: 45, pad: [57, 60, 64, 67], pool: [64, 67, 69, 72, 74, 76] },     // Am7
-    { root: 46, pad: [58, 62, 65, 69], pool: [62, 65, 70, 74, 77] },         // Bbmaj7
-    { root: 48, pad: [60, 64, 67, 70], pool: [64, 67, 72, 74, 76] }          // C7
+  /* Sections. Each is an 8-bar progression in its own key and mood, with its
+   * own tempo, groove and density. When a progression finishes the engine
+   * moves to a different one, so a long game never loops the same eight bars
+   * over and over. Each bar carries: bass root, pad voicing, melody pool. */
+  var SECTIONS = [
+    {
+      name: 'warm',        // Fmaj7 Am7 Dm7 G7 …  the original loop
+      tempo: 88, density: 1, swing: 0.06,
+      weights: [1.2, 0.45, 0.9, 0.55, 1.0, 0.45, 0.85, 0.65],
+      bars: [
+        { root: 41, pad: [53, 57, 60, 64], pool: [65, 67, 69, 72, 74, 76, 77] },
+        { root: 45, pad: [57, 60, 64, 67], pool: [64, 67, 69, 72, 74, 76] },
+        { root: 38, pad: [50, 53, 57, 60], pool: [62, 65, 69, 72, 74, 77] },
+        { root: 43, pad: [55, 59, 62, 65], pool: [62, 65, 67, 71, 74, 79] },
+        { root: 41, pad: [53, 57, 60, 64], pool: [65, 67, 69, 72, 74, 76, 77] },
+        { root: 45, pad: [57, 60, 64, 67], pool: [64, 67, 69, 72, 74, 76] },
+        { root: 46, pad: [58, 62, 65, 69], pool: [62, 65, 70, 74, 77] },
+        { root: 48, pad: [60, 64, 67, 70], pool: [64, 67, 72, 74, 76] }
+      ]
+    },
+    {
+      name: 'dusk',        // Cmaj7 Em7 Am7 Fmaj7 — brighter, a touch slower
+      tempo: 82, density: 0.85, swing: 0.09,
+      weights: [1.1, 0.4, 0.7, 0.6, 1.0, 0.35, 0.9, 0.5],
+      bars: [
+        { root: 36, pad: [52, 55, 59, 62], pool: [64, 67, 71, 72, 76, 79] },
+        { root: 40, pad: [52, 55, 59, 62], pool: [64, 67, 71, 74, 76] },
+        { root: 45, pad: [52, 57, 60, 64], pool: [64, 69, 72, 76, 79] },
+        { root: 41, pad: [53, 57, 60, 64], pool: [65, 69, 72, 77, 81] },
+        { root: 36, pad: [52, 55, 59, 62], pool: [64, 67, 71, 72, 76, 79] },
+        { root: 43, pad: [55, 59, 62, 65], pool: [62, 67, 71, 74, 79] },
+        { root: 45, pad: [52, 57, 60, 64], pool: [64, 69, 72, 76] },
+        { root: 43, pad: [55, 59, 62, 65], pool: [67, 71, 74, 79] }
+      ]
+    },
+    {
+      name: 'drift',       // Dm9 Bbmaj7 Gm7 A7 — moodier minor turn
+      tempo: 76, density: 0.7, swing: 0.12,
+      weights: [1.0, 0.3, 0.6, 0.4, 0.95, 0.3, 0.7, 0.45],
+      bars: [
+        { root: 38, pad: [50, 53, 57, 60], pool: [62, 65, 69, 72, 74] },
+        { root: 46, pad: [46, 53, 57, 60], pool: [65, 70, 72, 77] },
+        { root: 43, pad: [50, 55, 58, 62], pool: [62, 65, 70, 74] },
+        { root: 45, pad: [45, 52, 57, 61], pool: [64, 69, 73, 76] },
+        { root: 38, pad: [50, 53, 57, 60], pool: [62, 65, 69, 72, 74] },
+        { root: 46, pad: [46, 53, 57, 60], pool: [65, 70, 72, 77] },
+        { root: 41, pad: [53, 57, 60, 64], pool: [65, 69, 72, 77] },
+        { root: 43, pad: [50, 55, 58, 62], pool: [62, 67, 70, 74] }
+      ]
+    },
+    {
+      name: 'skip',        // Gmaj7 Bm7 Em7 C — the perkiest of the four
+      tempo: 94, density: 1.15, swing: 0.04,
+      weights: [1.25, 0.55, 1.0, 0.6, 1.1, 0.5, 0.95, 0.7],
+      bars: [
+        { root: 43, pad: [55, 59, 62, 66], pool: [67, 71, 74, 78, 79] },
+        { root: 47, pad: [54, 59, 62, 66], pool: [66, 71, 74, 78] },
+        { root: 40, pad: [52, 55, 59, 62], pool: [64, 67, 71, 74, 76] },
+        { root: 36, pad: [52, 55, 60, 64], pool: [64, 67, 72, 76, 79] },
+        { root: 43, pad: [55, 59, 62, 66], pool: [67, 71, 74, 78, 79] },
+        { root: 45, pad: [52, 57, 60, 64], pool: [64, 69, 72, 76] },
+        { root: 38, pad: [50, 53, 57, 60], pool: [62, 65, 69, 74] },
+        { root: 43, pad: [55, 59, 62, 65], pool: [62, 67, 71, 74] }
+      ]
+    }
   ];
 
-  // Per-step probability weights (down-beats favored, off-beats sparser).
-  var STEP_WEIGHT = [1.2, 0.45, 0.9, 0.55, 1.0, 0.45, 0.85, 0.65];
+  var section = SECTIONS[0];
+  var PROG = section.bars;                 // current 8 bars
+  var STEP_WEIGHT = section.weights;       // current groove
+
+  // Move to a different section (never the same one twice running) and
+  // re-derive the tempo from it.
+  function nextSection() {
+    var i = SECTIONS.indexOf(section);
+    var j = i;
+    while (j === i && SECTIONS.length > 1) j = Math.floor(Math.random() * SECTIONS.length);
+    section = SECTIONS[j];
+    PROG = section.bars;
+    STEP_WEIGHT = section.weights;
+    // A little tempo drift on top, so even a repeat feels different.
+    TEMPO = section.tempo + (Math.random() * 4 - 2);
+    BEAT = 60 / TEMPO;
+    EIGHTH = BEAT / 2;
+  }
 
   var musicRequested = false; // startMusic() has been asked for
   var musicPlaying = false;   // scheduler currently running
@@ -482,8 +553,9 @@
   }
 
   function makeMelodyPattern(barIdx) {
-    var chord = PROG[barIdx];
-    var density = 0.3 + Math.random() * 0.28; // varies bar to bar
+    var chord = PROG[barIdx] || PROG[0];
+    // Bar-to-bar wobble, scaled by how busy this section should feel.
+    var density = (0.3 + Math.random() * 0.28) * (section.density || 1);
     var slots = [];
     for (var i = 0; i < STEPS_PER_BAR; i++) {
       slots[i] = (Math.random() < density * STEP_WEIGHT[i]) ? pickMelodyNote(chord) : 0;
@@ -654,12 +726,16 @@
     if (!ctx || !musicPlaying) return;
     var horizon = ctx.currentTime + LOOKAHEAD;
     while (mus.nextTime < horizon) {
-      scheduleStep(mus.step, mus.bar, mus.nextTime);
+      // Off-beats land fractionally late — that is the swing.
+      var swing = (mus.step % 2 === 1) ? EIGHTH * section.swing : 0;
+      scheduleStep(mus.step, mus.bar, mus.nextTime + swing);
       mus.nextTime += EIGHTH;
       mus.step++;
       if (mus.step >= STEPS_PER_BAR) {
         mus.step = 0;
         mus.bar = (mus.bar + 1) % PROG.length;
+        // A finished progression hands over to a different section.
+        if (mus.bar === 0) nextSection();
         mus.pattern = makeMelodyPattern(mus.bar);
       }
     }
@@ -675,6 +751,7 @@
     mus.nextTime = t + 0.1;
     mus.step = 0;
     mus.bar = 0;
+    nextSection();   // start somewhere different each time the music starts
     mus.lastNote = 72;
     mus.pattern = makeMelodyPattern(0);
     schedulerTick();

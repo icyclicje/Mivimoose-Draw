@@ -10,6 +10,13 @@ const { Server } = require('socket.io');
 
 const api = require('./lib/api');
 const game = require('./lib/game');
+const config = require('./lib/config');
+
+// Discord embeds an Activity in an iframe served from *.discordsays.com, so
+// the anti-framing headers have to make room for it. Everything else stays.
+const FRAME_ANCESTORS = config.activityEnabled
+  ? "frame-ancestors https://discord.com https://*.discord.com https://*.discordsays.com"
+  : "frame-ancestors 'none'";
 
 const app = express();
 const server = http.createServer(app);
@@ -22,7 +29,9 @@ app.disable('x-powered-by');
 // Security headers on everything we serve.
 app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
-  res.setHeader('X-Frame-Options', 'DENY');
+  // X-Frame-Options cannot express an allow-list, so when the Activity is
+  // enabled we rely on the CSP frame-ancestors directive alone.
+  if (!config.activityEnabled) res.setHeader('X-Frame-Options', 'DENY');
   res.setHeader('Referrer-Policy', 'no-referrer');
   res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
   res.setHeader('Content-Security-Policy', [
@@ -32,7 +41,7 @@ app.use((req, res, next) => {
     "font-src https://fonts.gstatic.com",
     "img-src 'self' data: blob:",
     "connect-src 'self' ws: wss:",
-    "frame-ancestors 'none'",
+    FRAME_ANCESTORS,
   ].join('; '));
   next();
 });
@@ -53,4 +62,5 @@ game.init(io);
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
   console.log(`🎨 Mivimoose Draw running on http://localhost:${PORT}`);
+  if (config.activityEnabled) console.log('🎮 Discord Activity support is on — see docs/DISCORD_ACTIVITY.md');
 });

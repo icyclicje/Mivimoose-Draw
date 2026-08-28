@@ -58,7 +58,7 @@ const SMOKE_DATA = path.join(require('os').tmpdir(), 'mivimoose-smoke-' + proces
 async function main() {
   // ── boot server ──
   const server = spawn(process.execPath, [path.join(__dirname, '..', 'server.js')], {
-    env: { ...process.env, PORT: String(PORT), ALLOW_TEST_LOGIN: '1', MIVI_DATA_DIR: SMOKE_DATA },
+    env: { ...process.env, PORT: String(PORT), ALLOW_TEST_LOGIN: '1', MIVI_DATA_DIR: SMOKE_DATA, MIVI_NO_CONFIG: '1' },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   server.stderr.on('data', d => process.stderr.write('[server] ' + d));
@@ -684,6 +684,211 @@ async function main() {
     r = await rest('GET', '/mod/me', undefined, token);
     check('revoked account is no longer a mod', r.data.isMod === false);
 
+    // ═══ 7d7. Discord Activity: one room per voice channel ═══
+    console.log('— discord activity —');
+    const INST = 'instance-' + Math.floor(Math.random() * 1e9);
+    const AC1 = connect({ guestKey: 'c'.repeat(31) + '1', name: 'Chan1' });
+    await once(AC1, 'welcome');
+    p = once(AC1, 'roomJoined');
+    AC1.emit('joinActivity', { instanceId: INST, name: 'Chan1' });
+    const act1 = await p;
+    check('activity launch creates a room', /^[A-Z]{4}$/.test(act1.code) && act1.state.activity === true, JSON.stringify(act1.code));
+
+    const AC2 = connect({ guestKey: 'c'.repeat(31) + '2', name: 'Chan2' });
+    await once(AC2, 'welcome');
+    p = once(AC2, 'roomJoined');
+    AC2.emit('joinActivity', { instanceId: INST, name: 'Chan2' });
+    const act2 = await p;
+    check('same channel lands in the same room', act2.code === act1.code, act2.code + ' vs ' + act1.code);
+    check('both players are in it', act2.state.players.length === 2);
+
+    const AC3 = connect({ guestKey: 'c'.repeat(31) + '3', name: 'Other' });
+    await once(AC3, 'welcome');
+    p = once(AC3, 'roomJoined');
+    AC3.emit('joinActivity', { instanceId: INST + '-different', name: 'Other' });
+    const act3 = await p;
+    check('a different channel gets its own room', act3.code !== act1.code);
+
+    const AC4 = connect({ guestKey: 'c'.repeat(31) + '4', name: 'Nope' });
+    await once(AC4, 'welcome');
+    const badErr = once(AC4, 'error');
+    AC4.emit('joinActivity', {});
+    check('missing instance id refused', /which channel/i.test((await badErr).message));
+    AC1.disconnect(); AC2.disconnect(); AC3.disconnect(); AC4.disconnect();
+
+    // The Discord SDK shim must stay inert outside Discord, or the plain
+    // website breaks for everyone.
+    {
+      const sandbox = { window: { location: { search: '', href: 'http://x/' }, addEventListener() {}, parent: { postMessage() {} } }, document: { referrer: '' } };
+      const src = require('fs').readFileSync(path.join(__dirname, '..', 'public', 'js', 'discord.js'), 'utf8');
+      require('vm').runInNewContext(src, sandbox);
+      const D = sandbox.window.MiviDiscord;
+      const api = ['isActivity','proxyPrefix','context','init','authorize','authenticate','participants','onParticipantsChange','setActivity','openInvite','openExternalLink'];
+      check('discord shim exposes the whole contract', !!D && api.every(k => typeof D[k] === 'function'), D ? api.filter(k => typeof D[k] !== 'function').join(',') : 'no global');
+      check('discord shim is inert outside Discord', D.isActivity() === false && D.proxyPrefix() === '');
+      check('discord shim init resolves instead of throwing', (await D.init('x')).ok === false);
+      check('discord shim no-ops resolve safely', (await D.participants()).length === 0 && (await D.setActivity({})) === undefined);
+    }
+
+    // ═══ 7d8. Activity mode headers + endpoints (server with Discord set up) ═══
+    {
+      const APORT = Number(PORT) + 7;
+      const act = spawn(process.execPath, [path.join(__dirname, '..', 'server.js')], {
+        env: {
+          ...process.env, PORT: String(APORT), MIVI_NO_CONFIG: '1',
+          MIVI_DATA_DIR: SMOKE_DATA + '-activity',
+          DISCORD_CLIENT_ID: 'test-client-id', DISCORD_CLIENT_SECRET: 'test-secret',
+        },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      try {
+        await new Promise((resolve, reject) => {
+          const t = setTimeout(() => reject(new Error('activity server did not start')), 8000);
+          act.stdout.on('data', d => { if (String(d).includes('running')) { clearTimeout(t); resolve(); } });
+        });
+        const ABASE = `http://localhost:${APORT}`;
+        const cfg = await (await fetch(ABASE + '/api/auth/config')).json();
+        check('auth config advertises the activity', cfg.discord === true && cfg.activity === true && cfg.clientId === 'test-client-id', JSON.stringify(cfg));
+
+        const head = await fetch(ABASE + '/');
+        const csp = head.headers.get('content-security-policy') || '';
+        check('CSP lets Discord embed the page', csp.includes('frame-ancestors') && csp.includes('discordsays.com') && csp.includes('https://discord.com'), csp.slice(0, 120));
+        check('X-Frame-Options dropped in activity mode', !head.headers.get('x-frame-options'), String(head.headers.get('x-frame-options')));
+
+        const noCode = await fetch(ABASE + '/api/auth/discord/activity', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+        });
+        check('activity sign-in needs a code', noCode.status === 400);
+
+        // And with Discord switched off the strict headers come back.
+        const OFFPORT = Number(PORT) + 8;
+        const off = spawn(process.execPath, [path.join(__dirname, '..', 'server.js')], {
+          env: { ...process.env, PORT: String(OFFPORT), MIVI_NO_CONFIG: '1', MIVI_DATA_DIR: SMOKE_DATA + '-off' },
+          stdio: ['ignore', 'pipe', 'pipe'],
+        });
+        try {
+          await new Promise((resolve, reject) => {
+            const t = setTimeout(() => reject(new Error('plain server did not start')), 8000);
+            off.stdout.on('data', d => { if (String(d).includes('running')) { clearTimeout(t); resolve(); } });
+          });
+          const offHead = await fetch(`http://localhost:${OFFPORT}/`);
+          check('without Discord the page still refuses framing',
+            offHead.headers.get('x-frame-options') === 'DENY' &&
+            (offHead.headers.get('content-security-policy') || '').includes("frame-ancestors 'none'"));
+        } finally { off.kill(); }
+      } finally { act.kill(); }
+    }
+
+    // ═══ 7d9. Backdrops keep the drawing; word-choice extremes ═══
+    console.log('— backdrops keep art, choice extremes —');
+    const KA = connect({ guestKey: 'd'.repeat(31) + '1', name: 'Keeper' });
+    await once(KA, 'welcome');
+    p = once(KA, 'roomCreated'); KA.emit('createRoom', { name: 'Keeper' }); const roomKA = (await p).code;
+    const KB = connect({ guestKey: 'd'.repeat(31) + '2', name: 'Watcher2' });
+    await once(KB, 'welcome');
+    p = once(KB, 'roomJoined'); KB.emit('joinRoom', { code: roomKA }); await p;
+    p = once(KA, 'stateUpdate');
+    KA.emit('setGameOptions', { options: { rounds: 3, roundTime: 60, sceneBackgrounds: true, wordChoices: 25 } });
+    const kaOpts = await p;
+    check('word choices can go up to 25', kaOpts.options.wordChoices === 25);
+
+    let wcKA = once(KA, 'wordChoices');
+    KA.emit('startGame');
+    const manyWords = (await wcKA).words;
+    check('25 choices are actually offered', manyWords.length === 25, 'got ' + manyWords.length);
+    let dsKB = once(KB, 'drawingStart');
+    KA.emit('chooseWord', { word: manyWords[0] });
+    await dsKB;
+
+    // Draw something, then change the backdrop: the strokes must survive.
+    KA.emit('draw', { type: 'line', x1: 10, y1: 10, x2: 90, y2: 90, color: '#111111', size: 6 });
+    KA.emit('strokeEnd');
+    await sleep(200);
+    const sceneKeep = once(KB, 'sceneSet');
+    KA.emit('setScene', { id: 'beach' });
+    const kept = await sceneKeep;
+    check('backdrop change keeps the drawing', kept.id === 'beach' && Array.isArray(kept.history) && kept.history.length >= 1,
+      'history=' + (kept.history ? kept.history.length : 'none'));
+    KA.disconnect(); KB.disconnect();
+
+    // ═══ 7d10. No word choices → the word is dealt automatically ═══
+    console.log('— dealt words & unlimited rounds —');
+    const ZA = connect({ guestKey: 'd'.repeat(31) + '3', name: 'Dealt' });
+    await once(ZA, 'welcome');
+    p = once(ZA, 'roomCreated'); ZA.emit('createRoom', { name: 'Dealt' }); const roomZA = (await p).code;
+    const ZB = connect({ guestKey: 'd'.repeat(31) + '4', name: 'Dealt2' });
+    await once(ZB, 'welcome');
+    p = once(ZB, 'roomJoined'); ZB.emit('joinRoom', { code: roomZA }); await p;
+    p = once(ZA, 'stateUpdate');
+    ZA.emit('setGameOptions', { options: { wordChoices: 0, rounds: 0, roundTime: 60 } });
+    const zOpts = await p;
+    check('word choices can be 0', zOpts.options.wordChoices === 0);
+    check('rounds can be unlimited (0)', zOpts.options.rounds === 0);
+
+    const yourWordZ = once(ZA, 'yourWord');
+    const dsZB = once(ZB, 'drawingStart');
+    let sawChoices = false;
+    ZA.on('wordChoices', () => { sawChoices = true; });
+    ZA.emit('startGame');
+    const dealt = await yourWordZ;
+    const dsz = await dsZB;
+    check('a word is dealt with no picking step', !!dealt.word && !sawChoices, JSON.stringify(dealt.word));
+    check('drawing starts straight away', dsz.state === 'drawing');
+    ZA.disconnect(); ZB.disconnect();
+
+    // ═══ 7d10b. Pens down: the canvas freezes on the first guess ═══
+    console.log('— pens down —');
+    const LA = connect({ guestKey: 'e'.repeat(31) + '1', name: 'Locker' });
+    await once(LA, 'welcome');
+    p = once(LA, 'roomCreated'); LA.emit('createRoom', { name: 'Locker' }); const roomLA = (await p).code;
+    const LB = connect({ guestKey: 'e'.repeat(31) + '2', name: 'Guesser2' });
+    const LC = connect({ guestKey: 'e'.repeat(31) + '3', name: 'Guesser3' });
+    await once(LB, 'welcome'); await once(LC, 'welcome');
+    p = once(LB, 'roomJoined'); LB.emit('joinRoom', { code: roomLA }); await p;
+    p = once(LC, 'roomJoined'); LC.emit('joinRoom', { code: roomLA }); await p;
+    p = once(LA, 'customListAdded'); LA.emit('addCustomList', { name: 'locky', text: 'stone\nplant\nchair\nbread' }); await p;
+    p = once(LA, 'stateUpdate');
+    LA.emit('setWordLists', { lists: ['locky'], weights: {} });
+    await p;                       // let that broadcast land before the next
+    p = once(LA, 'stateUpdate');
+    LA.emit('setGameOptions', { options: { rounds: 1, roundTime: 60, lockOnGuess: true, autocorrectStrength: 0 } });
+    check('pens-down option set', (await p).options.lockOnGuess === true);
+    const wcLA = once(LA, 'wordChoices');
+    LA.emit('startGame');
+    const lockWord = (await wcLA).words[0];
+    const dsLB = once(LB, 'drawingStart');
+    LA.emit('chooseWord', { word: lockWord });
+    await dsLB;
+    LA.emit('draw', { type: 'line', x1: 1, y1: 1, x2: 9, y2: 9, color: '#111111', size: 6 });
+    LA.emit('strokeEnd');
+    await sleep(150);
+    const lockedP = once(LC, 'canvasLocked');
+    LB.emit('guess', { text: lockWord });
+    const locked = await lockedP;
+    check('first correct guess locks the canvas', locked.by === 'Guesser2', JSON.stringify(locked));
+    let drewWhileLocked = false;
+    const drawSpy = () => { drewWhileLocked = true; };
+    LC.on('draw', drawSpy);
+    LA.emit('draw', { type: 'line', x1: 20, y1: 20, x2: 40, y2: 40, color: '#111111', size: 6 });
+    LA.emit('clearCanvas');
+    await sleep(400);
+    LC.off('draw', drawSpy);
+    check('locked canvas refuses new strokes', !drewWhileLocked);
+    LA.disconnect(); LB.disconnect(); LC.disconnect();
+
+    // ═══ 7d11. Multi-word autocorrect is no longer a free pass ═══
+    console.log('— multi-word autocorrect —');
+    {
+      const S = require('../lib/similarity');
+      check('a real typo in a phrase still counts', S.matches('trafic light', 'traffic light', 3).ok);
+      check('one typo per word is fine', S.matches('traffic ligth', 'traffic light', 2).ok);
+      check('plurals still forgiven in phrases', S.matches('traffic lights', 'traffic light', 1).ok);
+      check('wrong first letters are refused even on Generous', !S.matches('xraffic xight', 'traffic light', 3).ok);
+      check('a wrong word is refused', !S.matches('traffic bight', 'traffic light', 3).ok);
+      check('half a phrase is refused', !S.matches('traffic', 'traffic light', 3).ok);
+      check('single words behave as before', S.matches('elephnat', 'elephant', 1).ok && !S.matches('cat', 'bat', 1).ok);
+    }
+
     // ═══ 7e. Avoid repeats never strands a tiny list ═══
     console.log('— avoid repeats —');
     const H4 = connect({ guestKey: '7'.repeat(32), name: 'Tiny' });
@@ -793,7 +998,11 @@ async function main() {
     console.error('\n💥 ' + e.stack);
   } finally {
     server.kill();
-    setTimeout(() => { try { require('fs').rmSync(SMOKE_DATA, { recursive: true, force: true }); } catch (e) {} }, 300);
+    setTimeout(() => {
+      for (const d of [SMOKE_DATA, SMOKE_DATA + '-activity', SMOKE_DATA + '-off']) {
+        try { require('fs').rmSync(d, { recursive: true, force: true }); } catch (e) {}
+      }
+    }, 300);
   }
 
   console.log(`\n══ ${pass} passed, ${fail} failed ══`);

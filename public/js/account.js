@@ -418,7 +418,7 @@
     for (const d of drawings) {
       const item = el('div', 'g-item');
       const img = document.createElement('img');
-      img.src = d.url;
+      img.src = API.assetUrl(d.url);
       img.alt = d.word;
       img.loading = 'lazy';
       item.appendChild(img);
@@ -434,7 +434,7 @@
       dl.title = 'Download';
       dl.onclick = () => {
         const a = document.createElement('a');
-        a.href = d.url;
+        a.href = API.assetUrl(d.url);
         a.download = (d.word || 'drawing').replace(/[^a-zA-Z0-9 ]/g, '-') + '.png';
         a.click();
       };

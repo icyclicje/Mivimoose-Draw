@@ -57,13 +57,31 @@
     } catch (e) {}
   })();
 
+  // Inside a Discord Activity every request has to travel through Discord's
+  // URL-mapping proxy, which means a "/.proxy" prefix. Everywhere else this
+  // is an empty string and nothing changes.
+  function proxyPrefix() {
+    try {
+      return (window.MiviDiscord && window.MiviDiscord.isActivity()) ? window.MiviDiscord.proxyPrefix() : '';
+    } catch (e) { return ''; }
+  }
+
+  function apiUrl(path) { return proxyPrefix() + '/api' + path; }
+
+  // Server-relative URLs handed to us in payloads (gallery images, etc.).
+  function assetUrl(u) {
+    if (typeof u !== 'string' || !u.startsWith('/')) return u;
+    const pre = proxyPrefix();
+    return (pre && !u.startsWith(pre)) ? pre + u : u;
+  }
+
   async function req(method, path, body) {
     const headers = { 'Content-Type': 'application/json' };
     const t = token();
     if (t) headers['Authorization'] = 'Bearer ' + t;
     let res;
     try {
-      res = await fetch('/api' + path, {
+      res = await fetch(apiUrl(path), {
         method,
         headers,
         body: body === undefined ? undefined : JSON.stringify(body),
@@ -83,6 +101,9 @@
   }
 
   window.MiviAPI = {
+    proxyPrefix,
+    assetUrl,
+    activityLogin: (code) => req('POST', '/auth/discord/activity', { code }),
     guestKey,
     token,
     setToken,
@@ -99,7 +120,7 @@
     createList: (name, words) => req('POST', '/lists', { name, words }),
     updateList: (id, patch) => req('PUT', '/lists/' + id, patch),
     deleteList: (id) => req('DELETE', '/lists/' + id),
-    exportListUrl: (id) => '/api/lists/' + id + '/export',
+    exportListUrl: (id) => apiUrl('/lists/' + id + '/export'),
 
     drawings: () => req('GET', '/drawings'),
     saveDrawing: (payload) => req('POST', '/drawings', payload),
@@ -112,7 +133,7 @@
     libraryUpload: (payload) => req('POST', '/library', payload),
     libraryDelete: (id) => req('DELETE', '/library/' + id),
     libraryRename: (id, name) => req('PUT', '/library/' + id, { name }),
-    libraryDownloadUrl: (id) => '/api/library/' + id + '/download',
+    libraryDownloadUrl: (id) => apiUrl('/library/' + id + '/download'),
 
     modMe: () => req('GET', '/mod/me'),
     modUsers: (q) => req('GET', '/mod/users' + (q ? '?q=' + encodeURIComponent(q) : '')),

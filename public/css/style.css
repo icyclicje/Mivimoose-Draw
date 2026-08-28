@@ -279,6 +279,13 @@ button { font-family: inherit; color: inherit; }
 
 /* ── Layout ──────────────────────────────────────────────── */
 #main { max-width: 1760px; margin: 0 auto; padding: 18px 20px 40px; }
+/* In a game the layout takes the whole window — the old max-width left a
+   band of empty space on wide screens and squeezed the canvas. */
+body.in-game #main { max-width: none; padding: 12px 14px 12px; height: calc(100dvh - 60px); display: flex; flex-direction: column; }
+body.in-game #screen-game.active { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+body.in-game .game-grid { flex: 1; min-height: 0; }
+body.in-game .canvas-card { min-height: 0; }
+body.in-game .players-card, body.in-game .chat-card { min-height: 0; }
 .screen { display: none; }
 .screen.active { display: block; animation: screenIn .35s ease; }
 @keyframes screenIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
@@ -558,10 +565,10 @@ input[type="color"] { width: 46px; height: 34px; border: 2px solid var(--line); 
 .msg.close { border-left: 3px solid var(--yellow); }
 .msg.whisper { opacity: .75; border-left: 3px solid var(--brand); }
 
-.wl-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px; }
+.wl-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 10px; }
 .wl-item {
   background: var(--card-2); border: 2px solid var(--line); border-radius: var(--r-md);
-  padding: 10px 12px; transition: border-color .15s; min-width: 0; overflow: hidden;
+  padding: 12px 14px; transition: border-color .15s; min-width: 0; overflow: hidden;
 }
 .wl-rename { background: none; border: none; cursor: pointer; font-size: 0.78rem; opacity: .6; padding: 0 2px; }
 .wl-rename:hover { opacity: 1; }
@@ -571,8 +578,20 @@ input[type="color"] { width: 46px; height: 34px; border: 2px solid var(--line); 
   font-size: 0.84rem; font-weight: 700; outline: none;
 }
 .wl-item.on { border-color: var(--brand); }
-.wl-top { display: flex; align-items: center; gap: 8px; cursor: pointer; font-weight: 700; font-size: 0.86rem; min-width: 0; }
-.wl-top .wl-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1; }
+/* The name gets the full width of the card and may wrap to a second line;
+   the count and buttons sit on the row below it. */
+.wl-top {
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center; gap: 6px 8px;
+  cursor: pointer; font-weight: 700; font-size: 0.9rem; min-width: 0;
+}
+.wl-top .wl-name {
+  grid-column: 2; min-width: 0;
+  overflow-wrap: anywhere; line-height: 1.25;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.wl-top .wl-badge { grid-column: 2; justify-self: start; }
+.wl-top .cnt { grid-column: 3; margin-left: 0; white-space: nowrap; }
 .wl-top input { accent-color: var(--brand); width: 16px; height: 16px; cursor: pointer; flex-shrink: 0; }
 .wl-top .cnt { color: var(--ink-dim); font-size: 0.72rem; font-weight: 600; margin-left: auto; }
 .wl-badge { font-size: 0.6rem; font-weight: 800; background: var(--grad); color: #fff; border-radius: 99px; padding: 2px 7px; letter-spacing: 1px; }
@@ -707,6 +726,7 @@ input[type="color"] { width: 46px; height: 34px; border: 2px solid var(--line); 
 .canvas-card .toolbar { width: 100%; justify-content: center; }
 .canvas-frame {
   position: relative; width: 100%; aspect-ratio: 4/3; margin: 0 auto;
+  max-height: 100%;
   -webkit-touch-callout: none; user-select: none; /* no long-press menus while drawing */
   max-width: var(--canvas-max, 100%); /* set by fitCanvas() to fill the viewport height */
   background: var(--canvas-bg); border-radius: var(--r-md);
@@ -728,7 +748,14 @@ input[type="color"] { width: 46px; height: 34px; border: 2px solid var(--line); 
 .wiggle { animation: wig 1.2s ease-in-out infinite; }
 @keyframes wig { 0%,100% { transform: rotate(-8deg); } 50% { transform: rotate(8deg); } }
 
-.word-choice-grid { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; margin-top: 6px; }
+.word-choice-grid {
+  display: flex; gap: 8px; flex-wrap: wrap; justify-content: center;
+  margin-top: 6px; max-height: 62%; overflow-y: auto; padding: 4px 8px;
+  align-content: flex-start;
+}
+/* Lots of options: shrink the buttons rather than spill off the canvas. */
+.word-choice-grid.many .word-choice { padding: 8px 14px; font-size: 0.9rem; }
+.word-choice-grid.lots .word-choice { padding: 6px 11px; font-size: 0.82rem; border-radius: 10px; }
 .word-choice {
   background: var(--card); border: 2px solid var(--line); border-radius: var(--r-md);
   padding: 14px 24px; font-weight: 800; font-size: 1.05rem; cursor: pointer;
@@ -794,37 +821,50 @@ input[type="color"] { width: 46px; height: 34px; border: 2px solid var(--line); 
 }
 
 /* ── Fullscreen / focus drawing mode ────────────────────── */
+/* Fullscreen is the whole game at full size, not the canvas on its own.
+   A 4:3 canvas on a 16:9 screen leaves room either side, so the players and
+   the chat keep that space rather than the layout wasting it. */
 body.focus-mode { overflow: hidden; }
 body.focus-mode .topbar { display: none; }
-body.focus-mode #screen-game .game-top {
-  position: fixed; top: 8px; left: 50%; transform: translateX(-50%);
-  z-index: 210; width: auto; min-width: min(680px, 94vw); margin: 0;
-  padding: 8px 16px; box-shadow: var(--shadow);
+body.focus-mode #screen-game {
+  position: fixed; inset: 0; z-index: 200;
+  background-color: var(--bg);
+  background-image: radial-gradient(var(--dot) 1.2px, transparent 1.2px);
+  background-size: 22px 22px;
+  padding: 10px; display: flex; flex-direction: column; gap: 10px;
 }
-body.focus-mode .game-grid { display: block; }
-body.focus-mode .players-card { display: none; }
-body.focus-mode .canvas-card {
-  position: fixed; inset: 0; z-index: 200; border-radius: 0; border: none;
-  padding: 74px 10px 10px; background: var(--bg);
-  display: flex; flex-direction: column; align-items: center;
-}
+body.focus-mode #screen-game .game-top { margin: 0; flex-shrink: 0; }
+body.focus-mode .game-grid { flex: 1; min-height: 0; align-items: stretch; }
+body.focus-mode .players-card,
+body.focus-mode .chat-card,
+body.focus-mode .canvas-card { min-height: 0; }
+body.focus-mode .canvas-card { display: flex; flex-direction: column; align-items: center; }
 body.focus-mode .canvas-frame {
   width: auto; height: auto; flex: 1; aspect-ratio: 4/3;
-  max-width: 100%; max-height: 100%;
-  margin: 0 auto; align-self: center;
+  max-width: 100%; max-height: 100%; margin: 0 auto; align-self: center;
 }
+body.focus-mode .toolbar { justify-content: center; }
+/* Chat is a normal column again, so the drawer and its toggle stand down. */
+body.focus-mode .chat-card { position: static; transform: none; width: auto; height: auto; box-shadow: var(--shadow-sm); }
+body.focus-mode .chat-head .chat-close { display: none; }
+body.focus-mode .float-chat-toggle { display: none; }
+
 /* The drawing surface's paper pattern sits under the strokes. */
 #canvas { background-color: var(--canvas-bg); }
-body.focus-mode .toolbar { justify-content: center; padding-top: 8px; }
-body.focus-mode .chat-card {
-  position: fixed; top: 0; right: 0; bottom: 0; z-index: 220;
-  width: min(340px, 90vw); height: 100%; border-radius: 0;
-  transform: translateX(105%); transition: transform .25s ease;
-  box-shadow: -10px 0 30px rgba(0,0,0,.2);
+
+/* On a narrow screen there is no spare width, so chat becomes a drawer again. */
+@media (max-width: 900px) {
+  body.focus-mode .game-grid { display: flex; flex-direction: column; }
+  body.focus-mode .chat-card {
+    position: fixed; top: 0; right: 0; bottom: 0; z-index: 220;
+    width: min(340px, 90vw); height: 100%; border-radius: 0;
+    transform: translateX(105%); transition: transform .25s ease;
+    box-shadow: -10px 0 30px rgba(0,0,0,.2);
+  }
+  body.focus-mode .chat-card.open { transform: none; }
+  body.focus-mode .chat-head .chat-close { display: block; }
+  body.focus-mode .float-chat-toggle { display: flex; }
 }
-body.focus-mode .chat-card.open { transform: none; }
-body.focus-mode .chat-head .chat-close { display: block; }
-body.focus-mode .float-chat-toggle { display: flex; }
 
 /* ── Modals ──────────────────────────────────────────────── */
 .modal-backdrop {
@@ -1080,6 +1120,73 @@ body.focus-mode .float-chat-toggle { display: flex; }
 .mod-row .badge.banned { background: var(--bad-soft); color: var(--bad); }
 .mod-note { font-size: 0.75rem; color: var(--ink-dim); font-weight: 600; margin-top: 10px; line-height: 1.5; }
 
+.activity-note {
+  margin-top: 12px; background: var(--brand-soft); color: var(--brand-on-soft);
+  font-weight: 700; font-size: 0.82rem; text-align: center;
+  border-radius: var(--r-md); padding: 9px 12px;
+}
+
+.emoji-picker {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(46px, 1fr));
+  gap: 4px; max-height: 46vh; overflow-y: auto; margin-top: 12px;
+}
+.emoji-picker button {
+  font-size: 1.5rem; line-height: 1; background: none; border: 2px solid transparent;
+  border-radius: 10px; padding: 6px 2px; cursor: pointer; transition: transform .1s, background .15s;
+}
+.emoji-picker button:hover { transform: scale(1.18); background: var(--card-2); }
+.emoji-picker button.sel { border-color: var(--brand); background: var(--brand-soft); }
+.emoji-group-label {
+  grid-column: 1 / -1; font-size: 0.7rem; font-weight: 800; letter-spacing: 1px;
+  text-transform: uppercase; color: var(--ink-dim); padding: 8px 2px 2px;
+}
+.tool-btn.emoji-armed { border-color: var(--brand); background: var(--brand-soft); }
+
+/* Settings groups */
+.set-group {
+  border: 1px solid var(--line); border-radius: var(--r-md);
+  padding: 14px 16px; margin-bottom: 12px;
+}
+.set-group-title {
+  font-size: 0.72rem; font-weight: 800; letter-spacing: 1.4px; text-transform: uppercase;
+  color: var(--ink-dim); margin-bottom: 12px;
+}
+.set-group .set-row { margin-bottom: 12px; }
+.set-group .set-row:last-child { margin-bottom: 0; }
+.set-row-inline { flex-direction: row; align-items: center; justify-content: space-between; gap: 14px; }
+.set-row-inline > label { margin-bottom: 0; white-space: nowrap; }
+.set-row-inline .set-inline { flex: 1; max-width: 240px; }
+.set-toggle { display: flex; align-items: center; gap: 12px; cursor: pointer; padding: 6px 0; font-weight: 700; font-size: 0.88rem; }
+.set-toggle-text { min-width: 0; }
+.set-slider-row { display: flex; align-items: center; gap: 10px; padding: 2px 0 10px 52px; }
+.set-slider-icon { font-size: 0.9rem; opacity: .7; }
+.set-slider-row .opt-val { min-width: 42px; }
+
+/* "Pens down" — the big lock that lands when someone gets the word. */
+.lock-flash {
+  position: absolute; inset: 0; z-index: 14;
+  display: none; flex-direction: column; align-items: center; justify-content: center;
+  gap: 10px; pointer-events: none;
+  background: color-mix(in srgb, var(--card) 40%, transparent);
+  backdrop-filter: blur(1.5px);
+}
+.lock-flash.show { display: flex; animation: lockFade 2.4s ease forwards; }
+.lock-emoji { font-size: 5.5rem; animation: lockDrop .55s cubic-bezier(.2, 1.5, .4, 1); filter: drop-shadow(0 8px 18px rgba(0,0,0,.35)); }
+.lock-text {
+  font-family: 'Fredoka', sans-serif; font-weight: 600; font-size: 1.5rem;
+  color: var(--ink); background: var(--card); border: 2px solid var(--brand);
+  border-radius: 99px; padding: 6px 20px; box-shadow: var(--shadow);
+}
+@keyframes lockDrop {
+  0% { transform: translateY(-60px) scale(.4) rotate(-18deg); opacity: 0; }
+  70% { transform: translateY(0) scale(1.12) rotate(4deg); opacity: 1; }
+  100% { transform: translateY(0) scale(1) rotate(0); opacity: 1; }
+}
+@keyframes lockFade { 0%, 72% { opacity: 1; } 100% { opacity: 0; } }
+/* While frozen, the canvas says so. */
+.canvas-frame.locked { outline: 3px solid var(--brand); outline-offset: -3px; }
+.canvas-frame.locked #canvas { cursor: not-allowed; }
+
 /* Theme picker (settings) */
 .theme-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 8px; }
 .theme-chip {
@@ -1147,7 +1254,11 @@ body.focus-mode .float-chat-toggle { display: flex; }
   .timer-wrap, .timer-ring { width: 44px; height: 44px; }
   .timer-num { font-size: 0.9rem; }
 
+  body.in-game #main { height: auto; padding: 8px 8px 20px; }
+  body.in-game #screen-game.active { display: block; }
   .game-grid { display: flex; flex-direction: column; gap: 8px; }
+  .wl-grid { grid-template-columns: 1fr; }
+  .set-slider-row { padding-left: 0; }
   .canvas-card { order: 1; padding: 6px; border-radius: 14px; }
   .canvas-frame { border-radius: 10px; }
   .players-card { order: 2; padding: 6px 8px; }
@@ -1179,8 +1290,8 @@ body.focus-mode .float-chat-toggle { display: flex; }
   .word-choice { padding: 10px 14px; font-size: 0.95rem; }
 
   /* Focus mode on a phone */
-  body.focus-mode .canvas-card { padding: 64px 4px 4px; }
-  body.focus-mode #screen-game .game-top { min-width: 0; width: calc(100vw - 16px); padding: 6px 10px; }
+  body.focus-mode #screen-game { padding: 6px; }
+  body.focus-mode #screen-game .game-top { padding: 6px 10px; }
   body.focus-mode .chat-card { width: 100vw; height: 100dvh; }
 
   /* Modals become bottom sheets */

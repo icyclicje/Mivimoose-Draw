@@ -116,6 +116,7 @@
             <button class="btn btn-big" id="btn-join">Join</button>
           </div>
         </div>
+        <button class="btn btn-big" id="btn-rejoin-activity" style="display:none">🎮 Back to your channel's game</button>
         <button class="btn btn-big btn-alt btn-library" id="btn-library">📚 List library <span class="btn-library-sub">grab word lists other people made, or share your own</span></button>
       </div>
 
@@ -150,6 +151,7 @@
             <span>List publicly<span class="toggle-hint">Anyone can find &amp; join this room</span></span>
           </label>
           <div class="autostart-banner" id="autostart-banner" style="display:none"></div>
+          <div class="activity-note" id="activity-note" style="display:none"></div>
         </div>
 
         <div class="card players-card-lobby">
@@ -237,6 +239,7 @@ t-shirt</pre>
             <label class="toggle-row" data-help="hidden"><input type="checkbox" id="opt-hidden" class="switch" /><span>Hidden mode<span class="toggle-hint">No hints or letter counts</span></span></label>
             <label class="toggle-row" data-help="coopMode"><input type="checkbox" id="opt-coopMode" class="switch" /><span>Co-op drawing<span class="toggle-hint">Two artists per round (3+ players)</span></span></label>
             <label class="toggle-row" data-help="sceneBackgrounds"><input type="checkbox" id="opt-sceneBackgrounds" class="switch" /><span>Scene backdrops<span class="toggle-hint">Artists can drop a scene behind their drawing</span></span></label>
+            <label class="toggle-row" data-help="lockOnGuess"><input type="checkbox" id="opt-lockOnGuess" class="switch" /><span>Pens down<span class="toggle-hint">The drawing freezes when the first person guesses</span></span></label>
             <label class="toggle-row" data-help="textTool"><input type="checkbox" id="opt-textTool" class="switch" /><span>Text tool<span class="toggle-hint">Artists can type on the canvas</span></span></label>
             <label class="toggle-row" data-help="showWordSource"><input type="checkbox" id="opt-showWordSource" class="switch" /><span>Show word source<span class="toggle-hint">Reveal which list the word came from</span></span></label>
             <label class="toggle-row" data-help="avoidRepeats"><input type="checkbox" id="opt-avoidRepeats" class="switch" checked /><span>Avoid repeats<span class="toggle-hint" id="avoid-hint">Words that already came up stay out of the rotation</span></span></label>
@@ -300,6 +303,10 @@ t-shirt</pre>
             <div class="word-choice-grid" id="choice-grid"></div>
           </div>
 
+          <div class="lock-flash" id="lock-flash" aria-hidden="true">
+            <div class="lock-emoji">🔒</div>
+            <div class="lock-text" id="lock-text">Pens down!</div>
+          </div>
           <button class="float-btn float-fullscreen" id="btn-fullscreen" title="Fullscreen drawing (F)">⛶</button>
           <div class="float-actions" id="float-actions">
             <button class="float-btn" id="btn-like" title="Like this drawing">❤️<span id="like-count"></span></button>
@@ -317,6 +324,7 @@ t-shirt</pre>
             <button class="tool-btn" data-tool="circle" title="Ellipse (C)">◯</button>
             <button class="tool-btn" data-tool="triangle" title="Triangle (T)">△</button>
             <button class="tool-btn tool-text" data-tool="text" id="tool-text" title="Text (X)" style="display:none">T</button>
+            <button class="tool-btn" data-tool="emoji" id="tool-emoji" title="Stamp an emoji (M)" style="display:none">😀</button>
             <button class="tool-btn" id="tool-scene" title="Pick a backdrop" style="display:none">🖼️</button>
           </div>
           <div class="tool-sep"></div>
@@ -566,6 +574,16 @@ t-shirt</pre>
   </div>
 </div>
 
+<div class="modal-backdrop" id="modal-emoji" style="display:none">
+  <div class="modal modal-lg">
+    <button class="modal-x" data-close="modal-emoji">✕</button>
+    <h2>😀 Emoji stamp</h2>
+    <p class="modal-sub">Pick one, then click the canvas to stamp it. The brush size sets how big it lands.</p>
+    <input type="text" id="emoji-search" class="input" placeholder="Search — face, food, animal…" maxlength="24" />
+    <div class="emoji-picker" id="emoji-picker"></div>
+  </div>
+</div>
+
 <div class="modal-backdrop" id="modal-scenes" style="display:none">
   <div class="modal modal-lg">
     <button class="modal-x" data-close="modal-scenes">✕</button>
@@ -579,18 +597,41 @@ t-shirt</pre>
   <div class="modal modal-sm">
     <button class="modal-x" data-close="modal-settings">✕</button>
     <h2>⚙️ Settings</h2>
-    <div class="form">
+    <p class="modal-sub">Just for you — none of this changes the game for anyone else.</p>
+
+    <div class="set-group">
+      <div class="set-group-title">Appearance</div>
       <div class="set-row"><label>Theme</label>
         <div class="theme-grid" id="theme-grid"></div>
       </div>
-      <div class="set-row"><label>Music</label>
-        <div class="set-inline"><input type="checkbox" id="set-music-on" class="switch" /><input type="range" id="set-music-vol" min="0" max="100" value="50" /></div>
+      <div class="set-row set-row-inline">
+        <label for="set-scale">Interface size</label>
+        <div class="set-inline">
+          <input type="range" id="set-scale" min="80" max="125" step="5" value="100" />
+          <span class="opt-val" id="set-scale-val">100%</span>
+        </div>
       </div>
-      <div class="set-row"><label>Sound effects</label>
-        <div class="set-inline"><input type="checkbox" id="set-sfx-on" class="switch" /><input type="range" id="set-sfx-vol" min="0" max="100" value="80" /></div>
+    </div>
+
+    <div class="set-group">
+      <div class="set-group-title">Sound</div>
+      <label class="set-toggle" for="set-music-on">
+        <input type="checkbox" id="set-music-on" class="switch" />
+        <span class="set-toggle-text">Background music<span class="toggle-hint">A quiet loop that shifts between four moods</span></span>
+      </label>
+      <div class="set-slider-row">
+        <span class="set-slider-icon">🎵</span>
+        <input type="range" id="set-music-vol" min="0" max="100" value="50" />
+        <span class="opt-val" id="set-music-vol-val">50%</span>
       </div>
-      <div class="set-row"><label>UI size</label>
-        <div class="set-inline"><input type="range" id="set-scale" min="80" max="125" step="5" value="100" /><span class="opt-val" id="set-scale-val">100%</span></div>
+      <label class="set-toggle" for="set-sfx-on">
+        <input type="checkbox" id="set-sfx-on" class="switch" />
+        <span class="set-toggle-text">Sound effects<span class="toggle-hint">Correct guesses, hints, the round timer</span></span>
+      </label>
+      <div class="set-slider-row">
+        <span class="set-slider-icon">🔔</span>
+        <input type="range" id="set-sfx-vol" min="0" max="100" value="80" />
+        <span class="opt-val" id="set-sfx-vol-val">80%</span>
       </div>
     </div>
   </div>
@@ -605,6 +646,7 @@ t-shirt</pre>
 <canvas id="confetti" width="0" height="0"></canvas>
 
 <script src="/socket.io/socket.io.js"></script>
+<script src="/js/discord.js"></script>
 <script src="/js/profanity.js"></script>
 <script src="/js/gif.js"></script>
 <script src="/js/fill.js"></script>

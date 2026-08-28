@@ -25,6 +25,21 @@ Discord is the only way to sign in — no passwords anywhere. Guests can play ev
 
 Environment variables work too and win over the file: `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`, `BASE_URL`.
 
+## Run it as a Discord Activity
+
+The game can run **inside Discord**, launched from a voice channel, as well as in a browser. Full step-by-step setup is in **[docs/DISCORD_ACTIVITY.md](docs/DISCORD_ACTIVITY.md)** — the short version is: deploy it somewhere with HTTPS, enable Activities on your Discord app, and add one URL mapping pointing at your host.
+
+The code side is already done for you. Once Discord credentials are configured, the server switches Activity support on by itself (`MIVI_ACTIVITY=0` turns it back off) and:
+
+- **Everyone in the same voice channel lands in the same game.** The activity instance id becomes the room, so there are no codes to share.
+- **Players are signed in as their Discord account automatically** — no sign-in screen, and their lists, gallery, stats and friends are all there.
+- **Requests route through Discord's proxy** (`/.proxy`) automatically, for both the REST API and the websocket.
+- **Rich presence** shows what round you're on and whether you're drawing or guessing.
+- **Invite** hands off to Discord's own invite dialog instead of copying a link.
+- The strict anti-framing headers relax to allow Discord's iframe **only** while Activity support is on; with it off, framing is refused as before.
+
+It stays a completely normal website at the same time — none of the above changes anything when you open it in a browser.
+
 ## Deploying it (Railway)
 
 Railpack builds this straight from `package.json` — no config files needed — but **`package.json` has to sit at the repo root**. If you ever see *"Railpack could not determine how to build the app"* and the contents it analyzed are just a folder name, that's a nested directory: either move the project up a level, or set the service's **Root Directory** to that subfolder.
@@ -63,7 +78,7 @@ Three things to set on the Railway service:
 
 Guessers get 250–500 points depending on how much time is left, minus a little for each person who beat them to it. The artist gets paid once, at the end of the round, in proportion to how many people guessed — up to 350, plus 50 if everyone got it.
 
-After each correct guess the clock gets capped based on how many guessers are still working: in a 4-guesser 90s round the first correct guess caps it at 49s, then 35s, then 22s, and the last person always keeps at least 12 seconds.
+After each correct guess the cock gets capped based on how many guessers are still working: in a 4-guesser 90s round the first correct guess caps it at 49s, then 35s, then 22s, and the last person always keeps at least 12 seconds.
 
 ## Project layout
 

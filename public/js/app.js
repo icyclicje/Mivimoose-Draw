@@ -27,6 +27,14 @@
   let wasArtistThisRound = false;  // survives setArtistMode(false) at round end
   let curWordSource = null, curWordSource2 = null;
   let gameFrames = [];             // one snapshot per finished round, for the GIF
+  let roundClockStart = 0;         // when the drawing phase began (wall clock)
+  let roundFirstGuesser = null;    // who got it first this round
+  let firstGuessTally = {};        // name -> how many rounds they got in first
+  let lastFinalScores = null;      // for the GIF's closing card
+  let canvasLocked = false;
+  let activityMode = false;        // running inside a Discord voice channel
+  let activityCtx = null;          // { instanceId, channelId, guildId, … }
+  let presenceAllowed = false;     // did Discord grant rpc.activities.write?
   let uiBusyUntil = 0;             // don't rebuild lobby panels while they're being used
 
   // Skip expensive re-renders for a moment after the host touches a control.
@@ -201,6 +209,7 @@
   function showScreen(id) {
     document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
     $(id).classList.add('active');
+    document.body.classList.toggle('in-game', id === 'screen-game');
     const onHome = id === 'screen-home';
     if (onHome) startRoomsPoll(); else stopRoomsPoll();
     if (id !== 'screen-game') exitFocusMode();
@@ -210,7 +219,10 @@
   function connectSocket() {
     if (socket) { socket.removeAllListeners(); socket.disconnect(); }
     socketToken = API.token();
+    // Inside an Activity the websocket has to go through Discord's proxy too.
+    const sockPath = API.proxyPrefix() + '/socket.io';
     socket = io({
+      path: sockPath,
       auth: {
         token: API.token(),
         guestKey: API.guestKey(),
@@ -229,6 +241,13 @@
       if (pendingJoin) {
         const code = pendingJoin; pendingJoin = null;
         socket.emit('joinRoom', { code, name: ensureName(), avatar: myAvatar() });
+      } else if (activityMode && activityCtx && activityCtx.instanceId && !roomCode) {
+        // Everyone who launched this activity in the same channel shares one room.
+        socket.emit('joinActivity', {
+          instanceId: activityCtx.instanceId,
+          name: ensureName(),
+          avatar: myAvatar(),
+        });
       } else {
         const target = roomCode || API.lsGet('mivi_room');
         if (target) socket.emit('joinRoom', { code: target, name: myName() || 'Player', avatar: myAvatar(), quiet: true });
@@ -312,7 +331,12 @@
 
       const amPicker = state.wordPickerId === myId;
       const amArtist = state.drawerId === myId || state.coopPartnerId === myId;
-      if (!amArtist && !amPicker) {
+      // With word choices set to 0 the server deals a word straight away, so
+      // there is no picking phase to show anybody.
+      if (state.autoWord) {
+        $('overlay-choosing').style.display = 'none';
+        $('overlay-choice').style.display = 'none';
+      } else if (!amArtist && !amPicker) {
         $('overlay-choosing').style.display = 'flex';
         $('overlay-wait').style.display = 'none';
         const nm = state.coopPartnerName
@@ -347,6 +371,9 @@
       $('overlay-wait').style.display = 'none';
       sceneId = state.scene || null;
       syncCanvasBackground();
+      roundClockStart = Date.now();
+      roundFirstGuesser = null;
+      setCanvasLocked(false);
       phaseTotal = state.options.roundTime;
       setTimer(state.timeLeft);
       const amArtist = state.drawerId === myId || state.coopPartnerId === myId;
@@ -397,10 +424,18 @@
       }
     });
 
-    socket.on('sceneSet', ({ id }) => {
+    socket.on('canvasLocked', ({ by }) => {
+      setCanvasLocked(true);
+      flashLock(by);
+      sfx('lock');
+    });
+
+    socket.on('sceneSet', ({ id, history }) => {
       sceneId = id || null;
       syncCanvasBackground();
+      // Repaint the backdrop, then put the drawing back on top of it.
       clearCanvasLocal();
+      if (Array.isArray(history)) history.forEach(applyDraw);
       closeTextInput();
     });
     socket.on('draw', (data) => applyDraw(data));
@@ -426,6 +461,10 @@
       sfx('correct');
       const wasMe = playerId === myId;
       const alreadyGuessed = guessedSet.has(myId);
+      if (!roundFirstGuesser) {
+        roundFirstGuesser = playerName;
+        firstGuessTally[playerName] = (firstGuessTally[playerName] || 0) + 1;
+      }
       guessedSet.add(playerId);
       if (wasMe) {
         hasGuessed = true;
@@ -465,11 +504,19 @@
       $('re-like-count').textContent = count;
       if (snap) snap.likes = count;
       sfx('like');
+      addAnyChat({ system: true, text: `❤️ ${playerName || 'Someone'} liked the drawing` });
+      // A little nudge for the artist, who is the one being complimented.
+      if (isArtist || wasArtistThisRound) {
+        toast(`❤️ ${playerName || 'Someone'} liked your drawing!`);
+        const btn = $('btn-like');
+        if (btn) { btn.classList.remove('pop'); void btn.offsetWidth; btn.classList.add('pop'); }
+      }
     });
 
     socket.on('roundEnd', (payload) => {
       if (gameState) gameState.state = 'roundEnd'; // so chat isn't routed as a dead guess
       wasArtistThisRound = isArtist;
+      setCanvasLocked(false);
       sfx('roundEnd');
       showRoundEnd(payload);
       setArtistMode(false);
@@ -489,6 +536,8 @@
     socket.on('backToLobby', (state) => {
       gameState = state;
       gameFrames = [];
+      firstGuessTally = {};
+      lastFinalScores = null;
       hideOverlay('overlay-roundend');
       hideOverlay('overlay-gameend');
       hasGuessed = false;
@@ -568,6 +617,7 @@
       if (state.state === 'drawing') {
         sceneId = state.scene || null;
         syncCanvasBackground();
+        setCanvasLocked(!!state.canvasLocked);
         phaseTotal = state.options.roundTime || 80;
         setTimer(state.timeLeft);
         $('overlay-wait').style.display = 'none';
@@ -592,7 +642,13 @@
   // height — wide screens no longer get a canvas that runs off the bottom.
   function fitCanvas() {
     const frame = $('canvas-frame');
-    if (!$('screen-game').classList.contains('active') || document.body.classList.contains('focus-mode')) {
+    if (!$('screen-game').classList.contains('active')) {
+      frame.style.removeProperty('--canvas-max');
+      return;
+    }
+    // In fullscreen the flex/aspect-ratio rules already size the canvas to
+    // the space left over beside the panels — don't fight them.
+    if (document.body.classList.contains('focus-mode')) {
       frame.style.removeProperty('--canvas-max');
       return;
     }
@@ -642,6 +698,8 @@
   function refreshRoomUI() {
     if (!gameState) return;
     syncHostGameButtons();
+    pushPresence();
+    renderActivityNote();
     if (gameState.state === 'lobby' && $('screen-lobby').classList.contains('active')) {
       updateLobby();
     } else if ($('screen-game').classList.contains('active')) {
@@ -718,6 +776,12 @@
     document.querySelector('.lobby-grid').classList.toggle('guest', !isHost);
     $('public-toggle-row').style.display = isHost ? 'flex' : 'none';
     $('btn-lobby-friends').style.display = window.MiviAccount.isLoggedIn() ? 'block' : 'none';
+    if (activityMode) {
+      // In a channel game the room code is noise — Discord's own invite is
+      // what people actually want.
+      $('btn-copy-invite').textContent = '📣 Invite to the channel';
+      renderActivityNote();
+    }
     $('toggle-public').checked = !!s.public;
     $('btn-start').style.display = isHost ? 'flex' : 'none';
     $('waiting-msg').style.display = isHost ? 'none' : 'block';
@@ -761,6 +825,7 @@
       ['Spam guard', o.spamProtection ? 'On' : 'Off'],
       ['Repeats', o.avoidRepeats ? 'Avoided' : 'Allowed'],
       ['Paper', (o.canvasBackground || 'plain').replace(/^./, c => c.toUpperCase())],
+      ['Pens down', o.lockOnGuess ? 'On' : 'Off'],
     ];
     for (const [label, val] of items) {
       const item = el('div', 'ro-item');
@@ -946,7 +1011,7 @@
   }
 
   const OPT_KEYS = ['rounds', 'roundTime', 'wordChoices', 'hintCount', 'maxPlayers', 'autocorrectStrength'];
-  const OPT_TOGGLES = ['combinations', 'lockComboParts', 'hidden', 'coopMode', 'showWordSource', 'spamProtection', 'textTool', 'avoidRepeats', 'sceneBackgrounds'];
+  const OPT_TOGGLES = ['combinations', 'lockComboParts', 'hidden', 'coopMode', 'showWordSource', 'spamProtection', 'textTool', 'avoidRepeats', 'sceneBackgrounds', 'lockOnGuess'];
 
   // Plain-language explanations shown when you tap the ? next to a setting.
   const HELP = {
@@ -963,6 +1028,7 @@
     textTool: 'Lets artists type text onto the canvas with the T tool. Writing the actual word (or anything close to it) is blocked.',
     showWordSource: 'After each round, show which list the word came from.',
     avoidRepeats: "Words that have already been drawn — or even shown as a choice — stay out of the rotation for this room, across games, until you change lists. Tiny lists can't get stuck: if the list runs dry, words that were only offered come back first, then ones that were drawn.",
+    lockOnGuess: 'The moment the first person guesses the word, the drawing freezes — no more strokes, no erasing, no clearing. Everyone else has to work out what is already on the canvas. A big lock drops in so nobody misses it.',
     sceneBackgrounds: "Gives whoever is drawing a 🖼️ button with ready-made backdrops — a city, a beach, space, a football pitch and plenty more. Handy when the word needs a setting; picking one clears the canvas, so pick it first.",
     canvasBackground: 'The paper everyone draws on. Grid and dot backgrounds help with proportions; the eraser puts the pattern back rather than painting over it.',
     spamProtection: 'Anyone sending more than six messages in five seconds, or the same thing three times in a row, gets muted for ten seconds. Always on in public games.',
@@ -1145,6 +1211,9 @@
     const title = $('choice-title');
     const grid = $('choice-grid');
     grid.textContent = '';
+    // 25 options must not spill off the canvas — shrink them instead.
+    grid.classList.toggle('many', words.length > 8);
+    grid.classList.toggle('lots', words.length > 15);
 
     if (readOnly) {
       title.textContent = `👀 ${pickerName || 'Your partner'} is picking…`;
@@ -1184,6 +1253,9 @@
     $('toolbar').style.display = artist ? 'flex' : 'none';
     const textOn = !!(gameState && gameState.options && gameState.options.textTool);
     $('tool-text').style.display = textOn ? 'flex' : 'none';
+    // The emoji stamp shares the text tool's switch.
+    $('tool-emoji').style.display = (artist && textOn) ? 'flex' : 'none';
+    if (!textOn && currentTool === 'emoji') setTool('pen');
     const sceneOn = !!(gameState && gameState.options && gameState.options.sceneBackgrounds);
     $('tool-scene').style.display = (artist && sceneOn) ? 'flex' : 'none';
     if (!textOn && currentTool === 'text') setTool('pen');
@@ -1334,6 +1406,77 @@
     if (batch.length) { socket.emit('drawBatch', batch); batch = []; }
   }
 
+  // ── Emoji stamp ──
+  // Rides on the text tool: the same room option turns both on, and a stamp
+  // is just a text event whose content happens to be an emoji.
+  const EMOJI_GROUPS = [
+    ['Faces', ['😀','😂','🥹','😍','😎','🤔','😴','🤯','😭','😡','🥳','🤠','👻','💀','🤖','👽','🎃','😇','🥶','🤢']],
+    ['People', ['👋','👍','👎','👏','🙏','💪','🫶','🤝','🧠','👀','👑','🧙','🥷','🧜','🧑‍🚀','🕺','💃','🤹','🏃','🧗']],
+    ['Animals', ['🐶','🐱','🐭','🐹','🐰','🦊','🐻','🐼','🐨','🐯','🦁','🐮','🐷','🐸','🐵','🐔','🐧','🦆','🦉','🦇','🐺','🐗','🐴','🦄','🐝','🐛','🦋','🐌','🐞','🐢','🐍','🦎','🐙','🦑','🦀','🐠','🐬','🐳','🦈','🐊']],
+    ['Food', ['🍏','🍎','🍐','🍊','🍋','🍌','🍉','🍇','🍓','🥝','🍅','🥕','🌽','🥔','🍞','🧀','🥚','🥓','🍔','🍟','🍕','🌭','🌮','🍿','🍩','🍪','🎂','🍰','🍫','🍭','☕','🍺']],
+    ['Nature', ['🌵','🌲','🌳','🌴','🌱','🌿','🍀','🍁','🍄','🌸','🌻','🌹','🌊','🔥','❄️','⭐','🌙','☀️','☁️','⚡','🌈','💧']],
+    ['Things', ['⚽','🏀','🏈','🎾','🎱','🎮','🎲','🎸','🎺','🥁','🎨','✏️','📚','💡','🔑','🔒','💰','💎','🎁','🎈','🚗','🚕','🚌','🚲','✈️','🚀','⛵','🏠','🏰','⏰','📱','💻','🛒','🧲','🪄','🗿']],
+    ['Symbols', ['❤️','💔','✨','💥','💤','❓','❗','✅','❌','➕','➖','🔴','🟠','🟡','🟢','🔵','🟣','⚫','⚪','🟤']],
+  ];
+
+  let pendingEmoji = null;
+
+  function buildEmojiPicker() {
+    const box = $('emoji-picker');
+    if (!box || box.dataset.built === '1') return;
+    box.dataset.built = '1';
+    for (const [label, list] of EMOJI_GROUPS) {
+      const head = el('div', 'emoji-group-label', label);
+      head.dataset.group = label.toLowerCase();
+      box.appendChild(head);
+      for (const e of list) {
+        const b = el('button', '', e);
+        b.type = 'button';
+        b.dataset.group = label.toLowerCase();
+        b.title = e;
+        b.addEventListener('click', () => chooseEmoji(e));
+        box.appendChild(b);
+      }
+    }
+  }
+
+  function filterEmoji(q) {
+    const term = String(q || '').trim().toLowerCase();
+    document.querySelectorAll('#emoji-picker [data-group]').forEach(node => {
+      const hit = !term || node.dataset.group.includes(term);
+      node.style.display = hit ? '' : 'none';
+    });
+  }
+
+  function chooseEmoji(e) {
+    pendingEmoji = e;
+    setTool('emoji');
+    $('tool-emoji').textContent = e;
+    $('tool-emoji').classList.add('emoji-armed');
+    $('modal-emoji').style.display = 'none';
+    sfx('pop');
+    toast('Click the canvas to stamp ' + e);
+  }
+
+  function openEmojiPicker() {
+    buildEmojiPicker();
+    filterEmoji($('emoji-search').value);
+    $('modal-emoji').style.display = 'flex';
+    setTimeout(() => $('emoji-search').focus(), 0);
+  }
+
+  function stampEmoji(p) {
+    if (!pendingEmoji) { openEmojiPicker(); return; }
+    const data = {
+      type: 'text', x: p.x, y: p.y, text: pendingEmoji,
+      color: currentColor, size: Math.max(brushSize, 8),
+    };
+    applyDraw(data);
+    flushBatch();
+    socket.emit('draw', data);
+    socket.emit('strokeEnd');
+  }
+
   // ── Text tool ──
   let textInput = null;
   const textPx = () => Math.round(brushSize * 3 + 14);
@@ -1390,8 +1533,13 @@
 
   function startDraw(e) {
     if (!isArtist || gameState?.state !== 'drawing') return;
+    if (canvasLocked) return;
     const p = pos(e);
 
+    if (currentTool === 'emoji') {
+      stampEmoji(p);
+      return;
+    }
     if (currentTool === 'text') {
       openTextInput(p);
       return;
@@ -1679,7 +1827,8 @@
   }
 
   function setTool(tool) {
-    if (tool === 'text' && !(gameState && gameState.options && gameState.options.textTool)) return;
+    if ((tool === 'text' || tool === 'emoji') && !(gameState && gameState.options && gameState.options.textTool)) return;
+    if (tool !== 'emoji') $('tool-emoji').classList.remove('emoji-armed');
     if (tool !== 'text') closeTextInput();
     currentTool = tool;
     document.querySelectorAll('.tool-btn[data-tool]').forEach(b => b.classList.toggle('active', b.dataset.tool === tool));
@@ -1734,7 +1883,7 @@
       }
     }
     $('re-image').src = dataUrl;
-    $('re-stats').textContent = `Drawn by ${artist} · ${snap.guessedCount}/${snap.playerCount} guessed it`;
+    $('re-stats').textContent = `Drawn by ${artist} · ${guessPhrase(snap.guessedCount, snap.playerCount)}`;
     $('re-like-count').textContent = String(snap.likes);
     $('btn-re-like').classList.toggle('used', likeUsed || wasArtistThisRound);
     $('btn-re-save').style.display = window.MiviAccount.isLoggedIn() ? 'inline-block' : 'none';
@@ -1756,7 +1905,12 @@
 
     // Keep the round's drawing for the end-of-game GIF.
     if (!p.aborted && snap.word) {
-      gameFrames.push({ dataUrl: snap.dataUrl, word: snap.word, artist: snap.artist });
+      gameFrames.push({
+        dataUrl: snap.dataUrl, word: snap.word, artist: snap.artist,
+        guessed: snap.guessedCount, total: snap.playerCount,
+        seconds: roundClockStart ? Math.max(1, Math.round((Date.now() - roundClockStart) / 1000)) : null,
+        first: roundFirstGuesser,
+      });
       if (gameFrames.length > 40) gameFrames.shift();
     }
     $('overlay-roundend').style.display = 'flex';
@@ -1790,6 +1944,15 @@
     } catch (e) {
       if (!auto) toast('❌ ' + e.message);
     }
+  }
+
+  // "3 of 5 guessed it" reads better than "3/5", and the ends deserve
+  // their own wording.
+  function guessPhrase(guessed, total) {
+    if (!total) return 'nobody was guessing';
+    if (guessed === 0) return `nobody got it (0 of ${total})`;
+    if (guessed === total) return total === 1 ? 'the one guesser got it' : `everyone got it (${total} of ${total})`;
+    return `${guessed} of ${total} guessed it`;
   }
 
   // Rounded rectangle path, with a fallback for older canvas engines.
@@ -1872,8 +2035,8 @@
 
     c.textAlign = 'right';
     c.fillStyle = '#B9B3F5';
-    c.font = "800 24px 'Plus Jakarta Sans', system-ui, sans-serif";
-    c.fillText(`${snap.guessedCount}/${snap.playerCount} guessed it`, W - PAD, baseY - 6);
+    c.font = "800 22px 'Plus Jakarta Sans', system-ui, sans-serif";
+    c.fillText(guessPhrase(snap.guessedCount, snap.playerCount), W - PAD, baseY - 6);
     c.fillStyle = '#6C6F91';
     c.font = "700 17px 'Plus Jakarta Sans', system-ui, sans-serif";
     const likes = snap.likes ? `❤️ ${snap.likes}   ·   ` : '';
@@ -1884,11 +2047,14 @@
     a.download = (snap.word || 'drawing').replace(/[^a-zA-Z0-9 ]/g, '-').trim() + '.png';
     a.click();
     sfx('save');
-    toast('⬇️ Saved to your downloads');
+    toast(activityMode
+      ? '⬇️ Saved — if Discord blocked it, open the game in your browser'
+      : '⬇️ Saved to your downloads');
   }
 
   let geTimer = null;
   function showGameEnd(finalScores) {
+    lastFinalScores = finalScores;
     const podium = $('podium');
     podium.textContent = '';
     const medals = ['🥇', '🥈', '🥉'];
@@ -2014,7 +2180,19 @@
       c.fillText(String(f.word).slice(0, 26), 84, GIF_H - 50);
       c.fillStyle = '#B9B3F5';
       c.font = "600 18px 'Plus Jakarta Sans', system-ui, sans-serif";
-      c.fillText('drawn by ' + String(f.artist).slice(0, 30), 84, GIF_H - 24);
+      let sub = 'drawn by ' + String(f.artist).slice(0, 22);
+      if (f.seconds) sub += '   ·   ' + f.seconds + 's';
+      c.fillText(sub, 84, GIF_H - 24);
+      c.textAlign = 'right';
+      c.fillStyle = '#8E93B8';
+      c.font = "700 17px 'Plus Jakarta Sans', system-ui, sans-serif";
+      c.fillText(guessPhrase(f.guessed, f.total), GIF_W - 18, GIF_H - 58);
+      if (f.first) {
+        c.fillStyle = '#7BE0C0';
+        c.font = "700 15px 'Plus Jakarta Sans', system-ui, sans-serif";
+        c.fillText('⚡ ' + String(f.first).slice(0, 22) + ' first', GIF_W - 18, GIF_H - 34);
+      }
+      c.textAlign = 'left';
       if (logo) c.drawImage(logo, 16, GIF_H - 68, 56, 56);
       c.textAlign = 'right';
       c.fillStyle = '#6C6F91';
@@ -2022,7 +2200,74 @@
       c.fillText('Mivimoose Draw', GIF_W - 18, GIF_H - 34);
       frames.push(cv);
     }
+
+    // Closing card: the final table and who was quickest on the buzzer.
+    // It is pushed several times so it lingers instead of blinking past.
+    const summary = buildSummaryFrame(logo);
+    if (summary) for (let i = 0; i < 4; i++) frames.push(summary);
     return frames;
+  }
+
+  function buildSummaryFrame(logo) {
+    const scores = lastFinalScores;
+    if (!scores || !scores.length) return null;
+    const cv = document.createElement('canvas');
+    cv.width = GIF_W;
+    cv.height = GIF_H;
+    const c = cv.getContext('2d');
+
+    c.fillStyle = '#16172C';
+    c.fillRect(0, 0, GIF_W, GIF_H);
+    const grad = c.createLinearGradient(0, 0, GIF_W, 0);
+    grad.addColorStop(0, '#6C5CE7');
+    grad.addColorStop(1, '#FD79A8');
+    c.fillStyle = grad;
+    c.fillRect(0, 0, GIF_W, 6);
+
+    c.textBaseline = 'middle';
+    c.textAlign = 'center';
+    c.fillStyle = '#FFFFFF';
+    c.font = "800 38px 'Plus Jakarta Sans', system-ui, sans-serif";
+    c.fillText('Final scores', GIF_W / 2, 58);
+
+    const medals = ['🥇', '🥈', '🥉'];
+    const top = scores.slice(0, 6);
+    const rowH = 46;
+    const startY = 118;
+    top.forEach((p, i) => {
+      const y = startY + i * rowH;
+      c.fillStyle = i % 2 ? '#1D1F3A' : '#20223F';
+      c.fillRect(48, y - 18, GIF_W - 96, 38);
+      c.textAlign = 'left';
+      c.fillStyle = i < 3 ? '#FFFFFF' : '#C9CCE8';
+      c.font = "700 22px 'Plus Jakarta Sans', system-ui, sans-serif";
+      c.fillText((medals[i] || ' ' + (i + 1) + ' ') + '  ' + String(p.name).slice(0, 20), 66, y);
+      c.textAlign = 'right';
+      c.fillStyle = '#B9B3F5';
+      c.font = "800 22px 'Plus Jakarta Sans', system-ui, sans-serif";
+      c.fillText(p.score + ' pts', GIF_W - 66, y);
+    });
+
+    // Fastest on the buzzer.
+    const names = Object.keys(firstGuessTally);
+    let bestName = null, bestCount = 0;
+    for (const n of names) if (firstGuessTally[n] > bestCount) { bestCount = firstGuessTally[n]; bestName = n; }
+    const footY = GIF_H - 62;
+    c.textAlign = 'center';
+    if (bestName) {
+      c.fillStyle = '#7BE0C0';
+      c.font = "800 22px 'Plus Jakarta Sans', system-ui, sans-serif";
+      c.fillText('⚡ Quickest on the buzzer: ' + String(bestName).slice(0, 22), GIF_W / 2, footY);
+      c.fillStyle = '#8E93B8';
+      c.font = "600 17px 'Plus Jakarta Sans', system-ui, sans-serif";
+      c.fillText('first to guess in ' + bestCount + (bestCount === 1 ? ' round' : ' rounds'), GIF_W / 2, footY + 26);
+    }
+    if (logo) c.drawImage(logo, 16, GIF_H - 60, 44, 44);
+    c.textAlign = 'right';
+    c.fillStyle = '#6C6F91';
+    c.font = "700 15px 'Plus Jakarta Sans', system-ui, sans-serif";
+    c.fillText('Mivimoose Draw', GIF_W - 18, GIF_H - 20);
+    return cv;
   }
 
   async function exportGameGif() {
@@ -2061,6 +2306,138 @@
     } finally {
       btn.disabled = false;
     }
+  }
+
+  // ── "Pens down" lock ──
+  function setCanvasLocked(on) {
+    canvasLocked = !!on;
+    $('canvas-frame').classList.toggle('locked', canvasLocked);
+    // Tools go away for the artist; there is nothing left to do with them.
+    if (isArtist) $('toolbar').style.display = canvasLocked ? 'none' : 'flex';
+    if (canvasLocked) closeTextInput();
+  }
+
+  function flashLock(byName) {
+    const box = $('lock-flash');
+    $('lock-text').textContent = byName ? `Pens down — ${byName} got it!` : 'Pens down!';
+    box.classList.remove('show');
+    void box.offsetWidth;          // restart the animation
+    box.classList.add('show');
+    clearTimeout(flashLock._h);
+    flashLock._h = setTimeout(() => box.classList.remove('show'), 2600);
+  }
+
+  // ── Discord Activity ──
+  // Everything here is a no-op on the normal website; the whole block only
+  // wakes up when the page is running inside Discord.
+  async function bootActivity() {
+    const D = window.MiviDiscord;
+    if (!D || !D.isActivity()) return false;
+    activityMode = true;
+    document.body.classList.add('in-activity');
+
+    let cfg = null;
+    try { cfg = await API.authConfig(); } catch (e) {}
+    if (!cfg || !cfg.clientId) {
+      toast('This server has no Discord app configured.');
+      return false;
+    }
+
+    const started = await D.init(cfg.clientId);
+    if (!started || !started.ok) {
+      toast('Could not talk to Discord — playing as a guest.');
+      return true; // still an activity, just unauthenticated
+    }
+    activityCtx = D.context();
+
+    // Sign the player in as their Discord account. If it fails they simply
+    // continue as a guest rather than getting stuck on an error.
+    try {
+      // rpc.activities.write is what lets us set rich presence. It has
+      // historically been a gated scope, so if Discord refuses it we fall
+      // back to the plain scopes rather than losing sign-in altogether.
+      let code;
+      try {
+        code = (await D.authorize(['identify', 'guilds', 'rpc.activities.write'])).code;
+        presenceAllowed = true;
+      } catch (scopeErr) {
+        code = (await D.authorize(['identify', 'guilds'])).code;
+        presenceAllowed = false;
+      }
+      if (!code) throw new Error('no authorization code');
+      const data = await API.activityLogin(code);
+      API.setToken(data.token);
+      try { await D.authenticate(data.accessToken); } catch (e) {}
+      if (data.user && data.user.username) {
+        API.lsSet('mivi_name', data.user.username);
+        $('home-name').value = data.user.username;
+      }
+    } catch (e) {
+      if (window.MIVI_DISCORD_DEBUG) console.warn('activity sign-in failed', e);
+    }
+
+    // Who else is in the voice channel but not yet in the game?
+    D.onParticipantsChange(renderActivityNote);
+    D.participants().then(renderActivityNote).catch(() => {});
+    return true;
+  }
+
+  let channelPeople = [];
+  function renderActivityNote(list) {
+    if (Array.isArray(list)) channelPeople = list;
+    const note = $('activity-note');
+    if (!activityMode || !note) return;
+    const here = gameState ? gameState.players.length : 0;
+    const inChannel = channelPeople.length;
+    note.style.display = 'block';
+    note.textContent = inChannel > here
+      ? `${here} of ${inChannel} people in the channel are playing — the rest just need to launch the activity.`
+      : 'Everyone in the channel is in the game.';
+  }
+
+  // Discord shows this on the player's profile while they play.
+  let presenceAt = 0;
+  let presenceTimer = null;
+  function pushPresence() {
+    if (!activityMode || !window.MiviDiscord || !presenceAllowed) return;
+    const now = Date.now();
+    if (now - presenceAt < 5000) {           // Discord rate-limits presence updates
+      clearTimeout(presenceTimer);
+      presenceTimer = setTimeout(pushPresence, 5000 - (now - presenceAt));
+      return;
+    }
+    presenceAt = now;
+    const s = gameState;
+    if (!s) return;
+    let details = 'In the lobby';
+    let state = '';
+    if (s.state === 'choosing') {
+      details = `Round ${s.round}/${s.totalRounds}`;
+      state = 'Picking a word';
+    } else if (s.state === 'drawing') {
+      details = `Round ${s.round}/${s.totalRounds}`;
+      state = isArtist ? 'Drawing' : 'Guessing';
+    } else if (s.state === 'roundEnd') {
+      details = `Round ${s.round}/${s.totalRounds}`;
+      state = 'Between rounds';
+    } else if (s.state === 'gameEnd') {
+      details = 'Final scores';
+    }
+    window.MiviDiscord.setActivity({
+      details,
+      state,
+      partySize: s.players.length,
+      partyMax: s.options.maxPlayers,
+    });
+  }
+
+  function rejoinActivityGame() {
+    if (!activityMode || !activityCtx || !socket) return;
+    socket.emit('joinActivity', {
+      instanceId: activityCtx.instanceId,
+      name: ensureName(),
+      avatar: myAvatar(),
+    });
   }
 
   // ── Confetti ──
@@ -2211,12 +2588,19 @@
     $('set-music-vol').value = Math.round(st.musicVolume * 100);
     $('set-sfx-vol').value = Math.round(st.sfxVolume * 100);
     $('btn-music').classList.toggle('off', !st.musicEnabled);
+    $('set-music-vol-val').textContent = Math.round(st.musicVolume * 100) + '%';
+    $('set-sfx-vol-val').textContent = Math.round(st.sfxVolume * 100) + '%';
   }
 
   // ── Invite links ──
   function inviteUrl() { return location.origin + '/?join=' + roomCode; }
   function copyInvite() {
     if (!roomCode) return;
+    // Inside Discord, hand off to the real invite dialog instead.
+    if (activityMode && window.MiviDiscord) {
+      window.MiviDiscord.openInvite().catch(() => {});
+      return;
+    }
     const url = inviteUrl();
     if (navigator.share) {
       navigator.share({ title: 'Mivimoose Draw', text: 'Come draw with me!', url }).catch(() => {
@@ -2468,6 +2852,10 @@
     document.addEventListener('pointerdown', unlock);
     document.addEventListener('keydown', unlock);
 
+    // Discord Activity, if that is where we are. This may sign the player in,
+    // so it has to happen before the account check and the socket connect.
+    await bootActivity();
+
     // Account → then socket (token must be known before connecting).
     await window.MiviAccount.init();
     if (window.__miviJustSignedIn && window.MiviAccount.isLoggedIn()) {
@@ -2628,7 +3016,7 @@
       if (k === 'f') { e.preventDefault(); toggleFocusMode(); }
       if (k === 'escape') exitFocusMode();
       if (!isArtist) return;
-      const toolMap = { b: 'pen', e: 'eraser', g: 'fill', l: 'line', r: 'rect', c: 'circle', t: 'triangle', x: 'text' };
+      const toolMap = { b: 'pen', e: 'eraser', g: 'fill', l: 'line', r: 'rect', c: 'circle', t: 'triangle', x: 'text', m: 'emoji' };
       if (toolMap[k]) setTool(toolMap[k]);
     });
 
@@ -2644,8 +3032,14 @@
     $('btn-settings').addEventListener('click', () => { syncAudioUI(); $('modal-settings').style.display = 'flex'; });
     $('set-music-on').addEventListener('change', e => { Audio.init(); Audio.setMusicEnabled(e.target.checked); if (e.target.checked) Audio.startMusic(); syncAudioUI(); });
     $('set-sfx-on').addEventListener('change', e => { Audio.setSfxEnabled(e.target.checked); });
-    $('set-music-vol').addEventListener('input', e => Audio.setMusicVolume(e.target.value / 100));
-    $('set-sfx-vol').addEventListener('input', e => Audio.setSfxVolume(e.target.value / 100));
+    $('set-music-vol').addEventListener('input', e => {
+      Audio.setMusicVolume(e.target.value / 100);
+      $('set-music-vol-val').textContent = e.target.value + '%';
+    });
+    $('set-sfx-vol').addEventListener('input', e => {
+      Audio.setSfxVolume(e.target.value / 100);
+      $('set-sfx-vol-val').textContent = e.target.value + '%';
+    });
     $('set-scale').addEventListener('input', e => applyScale(parseInt(e.target.value, 10)));
 
     // ── List odds (lobby) ──
@@ -2708,6 +3102,15 @@
       socket.emit('endGameNow');
     });
     $('btn-gamesettings').addEventListener('click', openGameSettings);
+    $('tool-emoji').addEventListener('click', (e) => {
+      // Clicking the tool again re-opens the picker so you can swap emoji.
+      if (currentTool === 'emoji' || !pendingEmoji) { e.preventDefault(); openEmojiPicker(); }
+    });
+    $('emoji-search').addEventListener('input', (e) => filterEmoji(e.target.value));
+    if (activityMode) {
+      $('btn-rejoin-activity').style.display = 'block';
+      $('btn-rejoin-activity').addEventListener('click', rejoinActivityGame);
+    }
     $('modal-gamesettings').addEventListener('mousedown', (e) => {
       if (e.target === $('modal-gamesettings')) closeGameSettings();
     });
