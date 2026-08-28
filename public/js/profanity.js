@@ -74,6 +74,25 @@
     return true;
   }
 
+  // Names get a stricter test than word-list entries: these are matched
+  // anywhere in the string, so "Shitlord" is caught even though "shit"
+  // is not a whole word in it. Kept deliberately short — broad substrings
+  // catch innocent words ("grape" contains "rape").
+  var NAME_SUBSTRINGS = [
+    'fuck', 'shit', 'cunt', 'whore', 'slut', 'wank', 'bitch', 'bastard',
+    'nigg', 'fagg', 'kike', 'chink', 'tranny', 'retard', 'nazi', 'hitler',
+    'penis', 'vagina', 'blowjob', 'handjob', 'porn', 'pedo', 'rapist',
+  ];
+
+  function isCleanName(text) {
+    if (!isClean(text)) return false;
+    var squashed = normalize(text).replace(/[^a-z]/g, '');
+    for (var i = 0; i < NAME_SUBSTRINGS.length; i++) {
+      if (squashed.indexOf(NAME_SUBSTRINGS[i]) !== -1) return false;
+    }
+    return true;
+  }
+
   // Filter a list of words → { clean: [...], removed: n }
   function filter(words) {
     var clean = [];
@@ -85,5 +104,5 @@
     return { clean: clean, removed: removed };
   }
 
-  return { isClean: isClean, filter: filter };
+  return { isClean: isClean, isCleanName: isCleanName, filter: filter };
 });

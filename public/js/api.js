@@ -114,6 +114,13 @@
     libraryRename: (id, name) => req('PUT', '/library/' + id, { name }),
     libraryDownloadUrl: (id) => '/api/library/' + id + '/download',
 
+    modMe: () => req('GET', '/mod/me'),
+    modUsers: (q) => req('GET', '/mod/users' + (q ? '?q=' + encodeURIComponent(q) : '')),
+    modGrant: (userId) => req('POST', '/mod/grant', { userId }),
+    modRevoke: (userId) => req('POST', '/mod/revoke', { userId }),
+    modBan: (userId, reason) => req('POST', '/mod/ban', { userId, reason }),
+    modUnban: (userId) => req('POST', '/mod/unban', { userId }),
+
     friends: () => req('GET', '/friends'),
     friendRequest: (code) => req('POST', '/friends/request', { code }),
     friendAccept: (userId) => req('POST', '/friends/accept', { userId }),

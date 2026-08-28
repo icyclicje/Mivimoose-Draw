@@ -546,6 +546,7 @@
     $('room-pill').style.display = 'flex';
     $('btn-leave').style.display = 'inline-block';
     $('room-pill-code').textContent = code;
+    syncHostGameButtons();
     $('home-error').textContent = '';
 
     if (state.state === 'lobby') {
@@ -615,6 +616,9 @@
     API.lsDel('mivi_room');
     $('room-pill').style.display = 'none';
     $('btn-leave').style.display = 'none';
+    $('btn-endgame').style.display = 'none';
+    $('btn-gamesettings').style.display = 'none';
+    closeGameSettings();
     gameFrames = [];
     hideOverlay('overlay-roundend');
     hideOverlay('overlay-gameend');
@@ -626,8 +630,18 @@
     fetchRooms();
   }
 
+  // The host's in-game controls only make sense while a game is running.
+  function syncHostGameButtons() {
+    const s = gameState;
+    const isHost = !!(s && s.host === myId && !s.managed);
+    const playing = !!(s && s.state !== 'lobby');
+    $('btn-endgame').style.display = (isHost && playing && s.state !== 'gameEnd') ? 'inline-block' : 'none';
+    $('btn-gamesettings').style.display = (isHost && playing) ? 'flex' : 'none';
+  }
+
   function refreshRoomUI() {
     if (!gameState) return;
+    syncHostGameButtons();
     if (gameState.state === 'lobby' && $('screen-lobby').classList.contains('active')) {
       updateLobby();
     } else if ($('screen-game').classList.contains('active')) {
@@ -700,6 +714,7 @@
       grid.appendChild(chip);
     }
 
+    syncHostGameButtons();
     document.querySelector('.lobby-grid').classList.toggle('guest', !isHost);
     $('public-toggle-row').style.display = isHost ? 'flex' : 'none';
     $('btn-lobby-friends').style.display = window.MiviAccount.isLoggedIn() ? 'block' : 'none';
@@ -2213,6 +2228,40 @@
   }
 
   // ── List library ──
+  // ── In-game settings ──
+  // Rather than duplicate every control, the lobby's own panels are moved
+  // into the modal and put back afterwards, so all the wiring still applies.
+  let settingsMoved = false;
+
+  function openGameSettings() {
+    if (!gameState || gameState.managed || gameState.host !== myId) return;
+    const body = $('gamesettings-body');
+    const wl = $('words-panel');
+    const opt = $('options-panel');
+    wl.style.display = 'block';
+    opt.style.display = 'block';
+    body.appendChild(wl);
+    body.appendChild(opt);
+    settingsMoved = true;
+    renderWordLists(gameState.wordLists);
+    syncOptions(gameState.options);
+    renderMyLists();
+    $('modal-gamesettings').style.display = 'flex';
+  }
+
+  function closeGameSettings() {
+    if (!settingsMoved) { $('modal-gamesettings').style.display = 'none'; return; }
+    const right = document.querySelector('.lobby-right');
+    const anchor = $('options-readonly');
+    if (right && anchor) {
+      right.insertBefore($('words-panel'), anchor);
+      right.insertBefore($('options-panel'), anchor);
+    }
+    settingsMoved = false;
+    $('modal-gamesettings').style.display = 'none';
+  }
+
+  // ── List library ──
   function showLibTab(name) {
     document.querySelectorAll('#modal-library .tab').forEach(t => t.classList.toggle('active', t.dataset.libtab === name));
     document.querySelectorAll('#modal-library .tab-pane').forEach(p => p.classList.toggle('active', p.id === 'libtab-' + name));
@@ -2277,6 +2326,31 @@
           } catch (e) { toast('❌ ' + e.message); }
         };
         row.appendChild(use);
+      }
+      if (l.canModerate && !l.mine) {
+        const take = el('button', null, '🗑️');
+        take.title = 'Take this list down (moderator)';
+        take.onclick = async () => {
+          if (!confirm(`Take "${l.name}" down? It disappears for everyone.`)) return;
+          try { await API.libraryDelete(l.id); toast('🗑️ Taken down'); refreshLibrary(); }
+          catch (e) { toast('❌ ' + e.message); }
+        };
+        row.appendChild(take);
+        if (l.ownerId) {
+          const ban = el('button', null, '🚫');
+          ban.title = 'Stop ' + l.author + ' sharing lists';
+          ban.onclick = async () => {
+            const reason = prompt('Why is ' + l.author + ' being banned from sharing? (optional)');
+            if (reason === null) return;
+            try {
+              const res = await API.modBan(l.ownerId, reason);
+              toast(`🚫 ${l.author} banned — ${res.removedLists} list${res.removedLists === 1 ? '' : 's'} removed`);
+              refreshLibrary();
+              window.MiviAccount.refreshModPanel();
+            } catch (e) { toast('❌ ' + e.message); }
+          };
+          row.appendChild(ban);
+        }
       }
       if (l.mine) {
         const ren = el('button', null, '✏️');
@@ -2628,6 +2702,16 @@
       leaveToHome();
     });
     $('btn-gif').addEventListener('click', exportGameGif);
+    $('btn-endgame').addEventListener('click', () => {
+      if (!confirm('End the game now and go to the final scores?')) return;
+      sfx('click');
+      socket.emit('endGameNow');
+    });
+    $('btn-gamesettings').addEventListener('click', openGameSettings);
+    $('modal-gamesettings').addEventListener('mousedown', (e) => {
+      if (e.target === $('modal-gamesettings')) closeGameSettings();
+    });
+    $('modal-gamesettings').querySelector('.modal-x').addEventListener('click', closeGameSettings);
     $('opt-canvasBackground').addEventListener('change', (e) => {
       socket.emit('setGameOptions', { options: { canvasBackground: e.target.value } });
     });

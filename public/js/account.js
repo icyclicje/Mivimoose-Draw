@@ -87,7 +87,10 @@
     $('acct-avatar').style.background = user.avatar.color + '33';
     $('acct-since').textContent = 'Around since ' + new Date(user.created).toLocaleDateString();
     $('acct-autosave').checked = !!user.settings.autosaveDrawings;
+    $('acct-username').value = user.username;
+    $('name-error').textContent = '';
     renderStats();
+    refreshModPanel();
     refreshLists();
     refreshGallery();
     refreshFriends();
@@ -123,6 +126,7 @@
   // ── Word lists ──
   let cachedLists = [];
   let friendsData = null;
+  let modInfo = null;
 
   async function refreshLists() {
     try {
@@ -245,6 +249,95 @@
       };
       reader.readAsText(file);
     }
+  }
+
+  // ── Your display name ──
+  async function saveName() {
+    const name = $('acct-username').value.trim();
+    const err = $('name-error');
+    err.textContent = '';
+    if (!name || name === user.username) return;
+    const btn = $('btn-save-name');
+    btn.disabled = true;
+    try {
+      const data = await API.updateMe({ username: name });
+      user = data.user;
+      renderChip();
+      toast('✏️ You are now ' + user.username);
+      // A rename can hand over (or take away) the bootstrap mod badge.
+      refreshModPanel();
+      fireChange();
+    } catch (e) {
+      err.textContent = e.message;
+      $('acct-username').value = user.username;
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  // ── Moderators ──
+  async function refreshModPanel() {
+    try { modInfo = await API.modMe(); } catch (e) { modInfo = null; }
+    const isMod = !!(modInfo && modInfo.isMod);
+    $('tab-btn-mods').style.display = isMod ? 'block' : 'none';
+    if (!isMod) return;
+    $('mod-intro').textContent = modInfo.bootstrap
+      ? `Nobody holds the badge yet, so "${modInfo.bootstrapName}" has it by default. Give yourself the badge properly below and that fallback switches off.`
+      : 'Take down shared lists, stop an account from sharing, and hand the badge to whoever else you trust.';
+    loadModUsers('');
+  }
+
+  async function loadModUsers(q) {
+    const rows = $('mod-rows');
+    rows.textContent = '';
+    let data;
+    try { data = await API.modUsers(q); } catch (e) { toast('❌ ' + e.message); return; }
+    $('mod-empty').style.display = data.users.length ? 'none' : 'block';
+    for (const u of data.users) {
+      const row = el('div', 'list-row mod-row');
+      row.appendChild(el('span', 'ln', `${u.avatar?.emoji || '🙂'} ${u.username}`));
+      if (u.mod) row.appendChild(el('span', 'badge mod', 'MOD'));
+      else if (u.bootstrap) row.appendChild(el('span', 'badge boot', 'DEFAULT MOD'));
+      if (u.banned) row.appendChild(el('span', 'badge banned', 'BANNED'));
+      row.appendChild(el('span', 'lc', u.sharedLists + ' shared'));
+
+      const act = async (fn, okMsg) => {
+        try { await fn(); toast(okMsg); loadModUsers($('mod-search').value.trim()); refreshModPanel(); }
+        catch (e) { toast('❌ ' + e.message); }
+      };
+      if (!u.mod) {
+        const g = el('button', null, '🛡️');
+        g.title = 'Make ' + u.username + ' a moderator';
+        g.onclick = () => act(() => API.modGrant(u.id), '🛡️ ' + u.username + ' is a moderator');
+        row.appendChild(g);
+      } else {
+        const rv = el('button', null, '↩️');
+        rv.title = 'Take the badge back';
+        rv.onclick = () => {
+          if (!confirm('Remove ' + u.username + "'s moderator badge?")) return;
+          act(() => API.modRevoke(u.id), 'Badge removed');
+        };
+        row.appendChild(rv);
+      }
+      if (u.banned) {
+        const ub = el('button', null, '✅');
+        ub.title = 'Let them share again';
+        ub.onclick = () => act(() => API.modUnban(u.id), u.username + ' can share again');
+        row.appendChild(ub);
+      } else if (!u.mod) {
+        const b = el('button', null, '🚫');
+        b.title = 'Stop ' + u.username + ' sharing lists';
+        b.onclick = () => {
+          const reason = prompt('Why is ' + u.username + ' being banned from sharing? (optional)');
+          if (reason === null) return;
+          act(() => API.modBan(u.id, reason), u.username + ' can no longer share lists');
+        };
+        row.appendChild(b);
+      }
+      rows.appendChild(row);
+    }
+    const note = el('p', 'mod-note', 'Banning also pulls the lists that account already shared. Moderators cannot be banned — take the badge off first.');
+    rows.appendChild(note);
   }
 
   // ── Friends ──
@@ -385,6 +478,11 @@
     $('btn-import-acct-list').addEventListener('click', () => $('acct-import-file').click());
     $('acct-import-file').addEventListener('change', (e) => importFiles(e.target));
 
+    $('btn-save-name').addEventListener('click', saveName);
+    $('acct-username').addEventListener('keydown', e => { if (e.key === 'Enter') saveName(); });
+    $('btn-mod-search').addEventListener('click', () => loadModUsers($('mod-search').value.trim()));
+    $('mod-search').addEventListener('keydown', e => { if (e.key === 'Enter') loadModUsers($('mod-search').value.trim()); });
+
     $('btn-friend-add').addEventListener('click', addFriendByCode);
     $('friend-add-code').addEventListener('keydown', e => { if (e.key === 'Enter') addFriendByCode(); });
     $('friend-code').addEventListener('click', () => {
@@ -405,6 +503,8 @@
     refreshLists,
     refreshFriends,
     friendIds: () => new Set(friendsData ? friendsData.friends.map(f => f.id) : []),
+    isMod: () => !!(modInfo && modInfo.isMod),
+    refreshModPanel,
     onChange: (fn) => changeHandlers.push(fn),
     updateAvatar: async (avatar) => {
       if (!user) return;

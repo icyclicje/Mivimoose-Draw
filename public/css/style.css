@@ -588,6 +588,10 @@ input[type="color"] { width: 46px; height: 34px; border: 2px solid var(--line); 
 .wl-mylists { display: flex; gap: 8px; align-items: center; flex: 1; min-width: 200px; }
 .wl-mylists select { flex: 1; padding: 8px 12px; }
 
+/* The lobby panels get moved into the in-game settings modal as-is. */
+#gamesettings-body { display: flex; flex-direction: column; gap: 16px; }
+#gamesettings-body .card { border: none; box-shadow: none; padding: 0; }
+
 .opt-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 10px 24px; margin-bottom: 8px; }
 .opt {
   display: grid;
@@ -1061,6 +1065,20 @@ body.focus-mode .float-chat-toggle { display: flex; }
   font-size: 0.76rem; font-weight: 800; text-align: center;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+
+.name-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-bottom: 6px; flex-wrap: wrap; }
+.name-label { font-weight: 800; font-size: 0.9rem; }
+.name-edit { display: flex; gap: 8px; align-items: center; }
+.name-edit .input { width: 190px; }
+
+.mod-row .badge {
+  font-size: 0.62rem; font-weight: 800; letter-spacing: 1px; border-radius: 99px;
+  padding: 3px 8px; flex-shrink: 0;
+}
+.mod-row .badge.mod { background: var(--brand-soft); color: var(--brand-on-soft); }
+.mod-row .badge.boot { background: color-mix(in srgb, var(--yellow) 26%, transparent); color: var(--ink); }
+.mod-row .badge.banned { background: var(--bad-soft); color: var(--bad); }
+.mod-note { font-size: 0.75rem; color: var(--ink-dim); font-weight: 600; margin-top: 10px; line-height: 1.5; }
 
 /* Theme picker (settings) */
 .theme-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 8px; }

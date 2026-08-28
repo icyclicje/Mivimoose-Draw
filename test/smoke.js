@@ -578,6 +578,112 @@ async function main() {
     check('backdrop cleared for the next round', rsNext.scene === null || rsNext.scene === undefined);
     SC.disconnect(); SG.disconnect();
 
+    // ═══ 7d4. Host ends the game / retunes it mid-flight ═══
+    console.log('— end game & live settings —');
+    const EG = connect({ guestKey: 'b'.repeat(31) + '1', name: 'Bossy' });
+    await once(EG, 'welcome');
+    p = once(EG, 'roomCreated'); EG.emit('createRoom', { name: 'Bossy' }); const roomEG = (await p).code;
+    const EP = connect({ guestKey: 'b'.repeat(31) + '2', name: 'Player2' });
+    await once(EP, 'welcome');
+    p = once(EP, 'roomJoined'); EP.emit('joinRoom', { code: roomEG }); await p;
+    p = once(EG, 'stateUpdate');
+    EG.emit('setGameOptions', { options: { rounds: 5, roundTime: 120, hintCount: 1 } });
+    await p;
+    let wcEG = once(EG, 'wordChoices');
+    EG.emit('startGame');
+    let dsEP = once(EP, 'drawingStart');
+    EG.emit('chooseWord', { word: (await wcEG).words[0] });
+    await dsEP;
+
+    // Options are no longer lobby-only.
+    p = once(EP, 'stateUpdate');
+    EG.emit('setGameOptions', { options: { hintCount: 4, autocorrectStrength: 3 } });
+    const midOpts = await p;
+    check('host can change settings mid-game', midOpts.options.hintCount === 4 && midOpts.options.autocorrectStrength === 3, JSON.stringify(midOpts.options.hintCount));
+
+    // Shortening the clock must claw back the timer too.
+    const tickAfter = once(EP, 'timerTick');
+    EG.emit('setGameOptions', { options: { roundTime: 30 } });
+    check('shortening the clock trims time left', (await tickAfter).timeLeft <= 30);
+
+    // Word lists can be retuned mid-game as well.
+    p = once(EG, 'customListAdded'); EG.emit('addCustomList', { name: 'Midgame', text: 'apple\npear\nplum' }); await p;
+    p = once(EP, 'stateUpdate');
+    EG.emit('setWordLists', { lists: ['Midgame'], weights: { Midgame: 4 } });
+    check('host can swap word lists mid-game', (await p).wordLists.selected.includes('Midgame'));
+
+    // A guesser cannot end the game; the host can.
+    const egErr = once(EP, 'error');
+    EP.emit('endGameNow');
+    check('only the host can end the game', /only the host/i.test((await egErr).message));
+    const geEP = once(EP, 'gameEnd');
+    EG.emit('endGameNow');
+    check('host ends the game on demand', Array.isArray((await geEP).finalScores));
+    EG.disconnect(); EP.disconnect();
+
+    // ═══ 7d5. Renaming your account ═══
+    console.log('— rename —');
+    r = await rest('PUT', '/auth/me', { username: 'Sir Draws A Lot' }, tokenF);
+    check('rename works', r.status === 200 && r.data.user.username === 'Sir Draws A Lot', JSON.stringify(r.data));
+    r = await rest('GET', '/library', undefined, tokenF);
+    check('rename follows your shared lists', r.data.lists.every(l => !l.mine || l.author === 'Sir Draws A Lot'));
+    r = await rest('PUT', '/auth/me', { username: 'x' }, tokenF);
+    check('too-short name refused', r.status === 400);
+    r = await rest('PUT', '/auth/me', { username: 'Shitlord' }, tokenF);
+    check('rude name refused', r.status === 400);
+    r = await rest('PUT', '/auth/me', { username: uname }, tokenF);
+    check('name already taken refused', r.status === 409);
+
+    // ═══ 7d6. Moderators ═══
+    console.log('— mods —');
+    r = await rest('GET', '/mod/me', undefined, token);
+    check('ordinary account is not a mod', r.status === 200 && r.data.isMod === false && r.data.anyMods === false);
+    r = await rest('GET', '/mod/users', undefined, token);
+    check('mod routes are closed to non-mods', r.status === 403);
+
+    // Bootstrap: with nobody holding the badge, "Silk" has it.
+    const tokenS = (await rest('POST', '/auth/test-login', { username: 'tempsilk' + Math.floor(Math.random() * 1e5) })).data.token;
+    r = await rest('PUT', '/auth/me', { username: 'Silk' }, tokenS);
+    check('claimed the name Silk', r.status === 200);
+    const silkId = r.data.user.id;
+    r = await rest('GET', '/mod/me', undefined, tokenS);
+    check('bootstrap: Silk is a mod while nobody else is', r.data.isMod === true && r.data.bootstrap === true);
+
+    // Silk hands the badge to someone, which switches the fallback off.
+    // (meId is the same account the friends section already looked up.)
+    r = await rest('POST', '/mod/grant', { userId: meId }, tokenS);
+    check('a mod can hand out the badge', r.status === 200 && r.data.user.mod === true);
+    r = await rest('GET', '/mod/me', undefined, tokenS);
+    check('bootstrap switches off once a real mod exists', r.data.bootstrap === false && r.data.anyMods === true);
+    r = await rest('GET', '/mod/me', undefined, token);
+    check('the granted account is a mod', r.data.isMod === true);
+
+    // A mod can take down anyone's list and ban the uploader.
+    r = await rest('POST', '/library', { name: 'Doomed list', words: ['apple', 'pear'] }, tokenF);
+    const doomedId = r.data.list.id;
+    const ownerF = (await rest('GET', '/auth/me', undefined, tokenF)).data.user.id;
+    r = await rest('GET', '/library', undefined, token);
+    const doomedRow = r.data.lists.find(l => l.id === doomedId);
+    check('mods see the uploader on library rows', r.data.isMod === true && doomedRow && doomedRow.ownerId === ownerF);
+    r = await rest('DELETE', '/library/' + doomedId, undefined, token);
+    check('mod takes down someone else\'s list', r.status === 200);
+    r = await rest('POST', '/library', { name: 'Another one', words: ['apple', 'pear'] }, tokenF);
+    check('uploader can still share before the ban', r.status === 200);
+    r = await rest('POST', '/mod/ban', { userId: ownerF, reason: 'spam' }, token);
+    check('mod bans an account and pulls its lists', r.status === 200 && r.data.removedLists >= 1, JSON.stringify(r.data));
+    r = await rest('POST', '/library', { name: 'Nope', words: ['apple', 'pear'] }, tokenF);
+    check('banned account cannot share', r.status === 403);
+    r = await rest('POST', '/mod/ban', { userId: silkId }, token);
+    check('mods cannot be banned', r.status === 400);
+    r = await rest('POST', '/mod/unban', { userId: ownerF }, token);
+    check('mod lifts a ban', r.status === 200);
+    r = await rest('POST', '/library', { name: 'Back again', words: ['apple', 'pear'] }, tokenF);
+    check('unbanned account can share again', r.status === 200);
+    r = await rest('POST', '/mod/revoke', { userId: meId }, tokenS);
+    check('a mod can take the badge back', r.status === 200);
+    r = await rest('GET', '/mod/me', undefined, token);
+    check('revoked account is no longer a mod', r.data.isMod === false);
+
     // ═══ 7e. Avoid repeats never strands a tiny list ═══
     console.log('— avoid repeats —');
     const H4 = connect({ guestKey: '7'.repeat(32), name: 'Tiny' });

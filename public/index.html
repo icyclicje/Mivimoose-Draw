@@ -68,6 +68,8 @@
     <button class="icon-btn" id="btn-music" title="Music on/off">🎵</button>
     <button class="icon-btn" id="btn-theme" title="Change theme">🌙</button>
     <button class="icon-btn" id="btn-settings" title="Settings">⚙️</button>
+    <button class="icon-btn" id="btn-gamesettings" title="Game settings" style="display:none">🎛️</button>
+    <button class="btn btn-small btn-alt" id="btn-endgame" style="display:none">🏁 End game</button>
     <button class="btn btn-small btn-leave" id="btn-leave" style="display:none">🚪 Leave</button>
     <button class="account-chip" id="account-chip">
       <span class="account-chip-avatar" id="account-chip-avatar">👤</span>
@@ -472,9 +474,21 @@ t-shirt</pre>
       <button class="tab" data-tab="lists">My lists</button>
       <button class="tab" data-tab="gallery">Gallery</button>
       <button class="tab" data-tab="friends">Friends</button>
+      <button class="tab" data-tab="mods" id="tab-btn-mods" style="display:none">🛡️ Mods</button>
     </div>
 
     <div class="tab-pane active" id="tab-profile">
+      <div class="name-row">
+        <div>
+          <div class="name-label">Display name</div>
+          <div class="toggle-hint">What everyone sees. Changing it also renames your shared lists.</div>
+        </div>
+        <div class="name-edit">
+          <input type="text" id="acct-username" class="input" maxlength="20" placeholder="Your name" />
+          <button class="btn btn-small" id="btn-save-name">Save</button>
+        </div>
+      </div>
+      <div class="form-error" id="name-error"></div>
       <div class="stats-grid" id="stats-grid"></div>
       <label class="toggle-row"><input type="checkbox" id="acct-autosave" class="switch" checked /><span>Auto-save my drawings<span class="toggle-hint">Every round you draw lands in your gallery</span></span></label>
     </div>
@@ -514,6 +528,16 @@ t-shirt</pre>
       <p class="gallery-empty" id="gallery-empty">Nothing here yet. Draw something you're proud of and save it — or leave auto-save on and it'll happen by itself.</p>
     </div>
 
+    <div class="tab-pane" id="tab-mods">
+      <p class="modal-sub" id="mod-intro"></p>
+      <div class="le-row" style="margin-bottom:14px">
+        <input type="text" id="mod-search" class="input" placeholder="Search accounts by name…" maxlength="20" />
+        <button class="btn btn-small btn-alt" id="btn-mod-search">Search</button>
+      </div>
+      <div class="lists-rows" id="mod-rows"></div>
+      <p class="gallery-empty" id="mod-empty" style="display:none">No moderators or bans yet. Search for someone to give them the badge.</p>
+    </div>
+
     <div class="tab-pane" id="tab-friends">
       <div class="friend-code-row">
         <div>
@@ -530,6 +554,15 @@ t-shirt</pre>
       <div class="lists-rows" id="friend-rows"></div>
       <p class="gallery-empty" id="friends-empty" style="display:none">No friends on here yet. Swap codes, or hit ＋ next to someone while you're playing together.</p>
     </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="modal-gamesettings" style="display:none">
+  <div class="modal modal-lg">
+    <button class="modal-x" data-close="modal-gamesettings">✕</button>
+    <h2>🎛️ Game settings</h2>
+    <p class="modal-sub">Change things without stopping the game — most of it lands on the next round.</p>
+    <div id="gamesettings-body"></div>
   </div>
 </div>
 
