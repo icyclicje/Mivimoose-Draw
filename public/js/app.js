@@ -568,6 +568,20 @@
       window.MiviAccount.refreshFriends();
     });
 
+    socket.on('roomListsReady', ({ url, filename, count, bytes }) => {
+      const btn = $('btn-zip-lists');
+      clearTimeout(btn._h);
+      btn.disabled = false;
+      btn.textContent = '⬇️ Download all';
+      const a = document.createElement('a');
+      a.href = API.assetUrl(url);
+      a.download = filename;
+      a.click();
+      const kb = Math.max(1, Math.round(bytes / 1024));
+      toast(`📦 ${count} list${count === 1 ? '' : 's'} zipped (${kb} KB)`);
+      sfx('save');
+    });
+
     socket.on('customListRenamed', ({ to }) => toast(`✏️ Renamed to "${to}"`));
     socket.on('customListRemoved', ({ name }) => toast(`🗑️ Removed "${name}"`));
 
@@ -3049,6 +3063,17 @@
       box.style.display = show ? 'flex' : 'none';
       $('btn-list-odds').textContent = show ? 'ℹ️ Hide odds' : 'ℹ️ Odds';
       if (show) renderListOdds();
+    });
+
+    $('btn-zip-lists').addEventListener('click', () => {
+      const btn = $('btn-zip-lists');
+      btn.disabled = true;
+      btn.textContent = '⏳ Zipping…';
+      socket.emit('exportRoomLists');
+      // The button comes back either way — the server answers with the file
+      // or with an error toast.
+      clearTimeout(btn._h);
+      btn._h = setTimeout(() => { btn.disabled = false; btn.textContent = '⬇️ Download all'; }, 8000);
     });
 
     // ── List library ──

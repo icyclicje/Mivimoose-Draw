@@ -889,6 +889,74 @@ async function main() {
       check('single words behave as before', S.matches('elephnat', 'elephant', 1).ok && !S.matches('cat', 'bat', 1).ok);
     }
 
+    // ═══ 7d12. Host downloads every list as a zip ═══
+    console.log('— list zip —');
+    const ZH = connect({ guestKey: 'f'.repeat(31) + '1', name: 'Zipper' });
+    await once(ZH, 'welcome');
+    p = once(ZH, 'roomCreated'); ZH.emit('createRoom', { name: 'Zipper' }); const roomZH = (await p).code;
+    const ZG = connect({ guestKey: 'f'.repeat(31) + '2', name: 'NotHost' });
+    await once(ZG, 'welcome');
+    p = once(ZG, 'roomJoined'); ZG.emit('joinRoom', { code: roomZH }); await p;
+
+    // A guest may not have them.
+    const zipErr = once(ZG, 'error');
+    ZG.emit('exportRoomLists');
+    check('only the host can zip the lists', /only the host/i.test((await zipErr).message));
+
+    // Add a custom list and leave it unselected, so both branches are covered.
+    p = once(ZH, 'customListAdded');
+    ZH.emit('addCustomList', { name: 'Zip Test', text: 'alpha\nbeta\ngamma' });
+    await p;
+    p = once(ZH, 'stateUpdate');
+    ZH.emit('setWordLists', { lists: ['classic'], weights: {} });
+    await p;
+
+    const zipReady = once(ZH, 'roomListsReady');
+    ZH.emit('exportRoomLists');
+    const zipInfo = await zipReady;
+    check('zip is offered to the host', /^\/api\/download\/[a-f0-9]{32}$/.test(zipInfo.url) && zipInfo.count === 2,
+      JSON.stringify({ url: zipInfo.url, count: zipInfo.count }));
+
+    const zipRes = await fetch(BASE + zipInfo.url);
+    const zipBuf = Buffer.from(await zipRes.arrayBuffer());
+    check('zip downloads as an attachment', zipRes.status === 200
+      && (zipRes.headers.get('content-type') || '').includes('zip')
+      && (zipRes.headers.get('content-disposition') || '').includes('.zip'));
+    check('zip has the right shape', zipBuf.readUInt32LE(0) === 0x04034b50
+      && zipBuf.readUInt32LE(zipBuf.length - 22) === 0x06054b50
+      && zipBuf.readUInt16LE(zipBuf.length - 12) === 2,
+      'entries=' + zipBuf.readUInt16LE(zipBuf.length - 12));
+
+    // Unpack it for real to prove the bytes are a usable archive.
+    {
+      const os = require('os');
+      const fs = require('fs');
+      const zdir = path.join(os.tmpdir(), 'mivi-zip-' + process.pid);
+      fs.mkdirSync(zdir, { recursive: true });
+      const zfile = path.join(zdir, 'lists.zip');
+      fs.writeFileSync(zfile, zipBuf);
+      let names = [];
+      let classicText = '';
+      try {
+        const { execFileSync } = require('child_process');
+        execFileSync('powershell', ['-NoProfile', '-Command',
+          `Expand-Archive -LiteralPath '${zfile}' -DestinationPath '${zdir}\\out' -Force`],
+          { stdio: 'ignore' });
+        names = fs.readdirSync(path.join(zdir, 'out'));
+        const classic = names.find(n => /^Classic/i.test(n));
+        if (classic) classicText = fs.readFileSync(path.join(zdir, 'out', classic), 'utf8');
+      } catch (e) { names = ['<extract failed: ' + e.message + '>']; }
+      check('zip extracts to real .txt files', names.length === 2 && names.every(n => n.endsWith('.txt')), names.join(', '));
+      check('unselected lists are labelled', names.some(n => /^unused - Zip Test/.test(n)), names.join(', '));
+      check('word list survives the round trip', classicText.split(/\r?\n/).filter(Boolean).length > 1000,
+        'lines=' + classicText.split(/\r?\n/).filter(Boolean).length);
+      try { fs.rmSync(zdir, { recursive: true, force: true }); } catch (e) {}
+    }
+
+    const badTok = await fetch(BASE + '/api/download/' + '0'.repeat(32));
+    check('an unknown download token 404s', badTok.status === 404);
+    ZH.disconnect(); ZG.disconnect();
+
     // ═══ 7e. Avoid repeats never strands a tiny list ═══
     console.log('— avoid repeats —');
     const H4 = connect({ guestKey: '7'.repeat(32), name: 'Tiny' });
