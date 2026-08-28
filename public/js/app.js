@@ -35,6 +35,7 @@
   let activityMode = false;        // running inside a Discord voice channel
   let activityCtx = null;          // { instanceId, channelId, guildId, … }
   let presenceAllowed = false;     // did Discord grant rpc.activities.write?
+  let presenceStartedAt = 0;       // when this player joined, for the presence timer
   let uiBusyUntil = 0;             // don't rebuild lobby panels while they're being used
 
   // Skip expensive re-renders for a moment after the host touches a control.
@@ -176,6 +177,32 @@
     t._h = setTimeout(() => t.classList.remove('show'), 2600);
   }
 
+  // A player's bubble: their Discord picture when we have one, otherwise the
+  // emoji avatar they picked.
+  function avatarNode(p, className) {
+    const node = document.createElement('span');
+    node.className = className || 'p-avatar';
+    if (p && p.avatarUrl) {
+      node.classList.add('has-photo');
+      const img = document.createElement('img');
+      img.src = p.avatarUrl;
+      img.alt = '';
+      img.loading = 'lazy';
+      img.referrerPolicy = 'no-referrer';
+      // If the picture will not load, fall back to the emoji rather than a gap.
+      img.onerror = () => {
+        node.classList.remove('has-photo');
+        node.textContent = (p.avatar && p.avatar.emoji) || '🎨';
+        node.style.background = ((p.avatar && p.avatar.color) || '#6C5CE7') + '33';
+      };
+      node.appendChild(img);
+    } else {
+      node.textContent = (p && p.avatar && p.avatar.emoji) || '🎨';
+      node.style.background = ((p && p.avatar && p.avatar.color) || '#6C5CE7') + '33';
+    }
+    return node;
+  }
+
   function el(tag, className, text) {
     const n = document.createElement(tag);
     if (className) n.className = className;
@@ -210,6 +237,7 @@
     document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
     $(id).classList.add('active');
     document.body.classList.toggle('in-game', id === 'screen-game');
+    if (activityMode) scheduleActivityLayout();
     const onHome = id === 'screen-home';
     if (onHome) startRoomsPoll(); else stopRoomsPoll();
     if (id !== 'screen-game') exitFocusMode();
@@ -515,6 +543,7 @@
 
     socket.on('roundEnd', (payload) => {
       if (gameState) gameState.state = 'roundEnd'; // so chat isn't routed as a dead guess
+      syncHostGameButtons();
       wasArtistThisRound = isArtist;
       setCanvasLocked(false);
       sfx('roundEnd');
@@ -527,6 +556,7 @@
 
     socket.on('gameEnd', ({ finalScores }) => {
       if (gameState) gameState.state = 'gameEnd';
+      syncHostGameButtons();
       hideOverlay('overlay-roundend');
       sfx('gameOver');
       confetti(160);
@@ -534,6 +564,7 @@
     });
 
     socket.on('backToLobby', (state) => {
+      closeGameSettings();
       gameState = state;
       gameFrames = [];
       firstGuessTally = {};
@@ -764,15 +795,18 @@
     if (!s) return;
     const isHost = s.host === myId && !s.managed;
     $('lobby-code').textContent = s.code;
-    $('lobby-count').textContent = `${s.players.length}/${s.options.maxPlayers}`;
+    // Connected players, with a quiet note when someone is mid-reconnect.
+    const connected = s.players.filter(p => p.connected !== false).length;
+    $('lobby-count').textContent = connected === s.players.length
+      ? `${connected}/${s.options.maxPlayers}`
+      : `${connected}/${s.options.maxPlayers} · ${s.players.length - connected} away`;
+    renderPlayerCount();
 
     const grid = $('lobby-players');
     grid.textContent = '';
     for (const p of s.players) {
       const chip = el('div', 'p-chip' + (p.id === s.host ? ' host' : '') + (p.connected ? '' : ' dc'));
-      const av = el('span', 'p-avatar', p.avatar?.emoji || '🎨');
-      av.style.background = (p.avatar?.color || '#6C5CE7') + '33';
-      chip.appendChild(av);
+      chip.appendChild(avatarNode(p, 'p-avatar'));
       const chipName = el('span', 'nm', p.name + (p.id === myId ? ' (you)' : ''));
       chipName.title = p.name;
       chip.appendChild(chipName);
@@ -793,7 +827,11 @@
     if (activityMode) {
       // In a channel game the room code is noise — Discord's own invite is
       // what people actually want.
-      $('btn-copy-invite').textContent = '📣 Invite to the channel';
+      const inChannelGame = !!s.activity;
+      $('btn-copy-invite').textContent = inChannelGame ? '📣 Invite to the channel' : '🔗 Invite link';
+      // Anyone can break off into their own room, and get back afterwards.
+      $('btn-activity-custom').style.display = 'block';
+      $('btn-activity-back').style.display = inChannelGame ? 'none' : 'block';
       renderActivityNote();
     }
     $('toggle-public').checked = !!s.public;
@@ -927,10 +965,10 @@
         top.appendChild(ren);
         const rm = el('button', 'wl-remove', '🗑️');
         rm.title = 'Remove this list from the room';
-        rm.onclick = (e) => {
+        rm.onclick = async (e) => {
           e.preventDefault();
           e.stopPropagation();
-          if (!confirm(`Remove "${info.name}" from this room?`)) return;
+          if (!await MiviDialog.confirm(`Remove "${info.name}" from this room?`, { confirmLabel: 'Remove', danger: true })) return;
           markUiBusy(0);
           socket.emit('removeCustomList', { name: info.name });
         };
@@ -1114,6 +1152,10 @@
   function updatePlayers(opts = {}) {
     const s = gameState;
     if (!s) return;
+    // The host's in-game buttons live in the top bar, and this is the one
+    // function that runs on every state change — keep them in step here.
+    syncHostGameButtons();
+    renderPlayerCount();
     const list = $('players-list');
     list.textContent = '';
     const sorted = [...s.players].sort((a, b) => b.score - a.score);
@@ -1122,9 +1164,7 @@
       const guessed = guessedSet.has(p.id) || p.guessed;
       const row = el('div', 'p-row' + (isDrawing ? ' drawing' : '') + (guessed ? ' guessed' : '') + (p.connected === false ? ' dc' : ''));
       row.appendChild(el('span', 'rk', '#' + (i + 1)));
-      const av = el('span', 'p-avatar', p.avatar?.emoji || '🎨');
-      av.style.background = (p.avatar?.color || '#6C5CE7') + '33';
-      row.appendChild(av);
+      row.appendChild(avatarNode(p, 'p-avatar'));
       const nm = el('span', 'nm', p.name + (p.id === myId ? ' (you)' : ''));
       nm.title = p.name;
       row.appendChild(nm);
@@ -1147,6 +1187,25 @@
       if (opts.bumpId === p.id) row.appendChild(el('span', 'bump', '+' + opts.bumpPts));
       list.appendChild(row);
     });
+  }
+
+  // How many people are in this game, wherever it is being played.
+  function renderPlayerCount() {
+    const s = gameState;
+    const box = $('player-count');
+    if (!box) return;
+    if (!s) { box.style.display = 'none'; return; }
+    const here = s.players.filter(p => p.connected !== false).length;
+    const max = (s.options && s.options.maxPlayers) || here;
+    box.style.display = 'inline-flex';
+    $('player-count-num').innerHTML = '';
+    const strong = document.createElement('b');
+    strong.textContent = String(here);
+    $('player-count-num').appendChild(strong);
+    $('player-count-num').appendChild(document.createTextNode(' / ' + max + (here === 1 ? ' player' : ' players')));
+    box.title = s.managed
+      ? here + ' in this public game'
+      : here + ' in this room' + (s.players.length > here ? ' (' + (s.players.length - here) + ' reconnecting)' : '');
   }
 
   // Timer ring
@@ -1850,6 +1909,7 @@
 
   // ── Fullscreen focus mode ──
   function toggleFocusMode() {
+    autoFocusOn = false;   // you asked for this; stop second-guessing it
     if (document.body.classList.contains('focus-mode')) exitFocusMode();
     else enterFocusMode();
   }
@@ -2363,6 +2423,7 @@
       return true; // still an activity, just unauthenticated
     }
     activityCtx = D.context();
+    presenceStartedAt = Date.now();
 
     // Sign the player in as their Discord account. If it fails they simply
     // continue as a guest rather than getting stuck on an error.
@@ -2393,6 +2454,13 @@
     // Who else is in the voice channel but not yet in the game?
     D.onParticipantsChange(renderActivityNote);
     D.participants().then(renderActivityNote).catch(() => {});
+    // Follow Discord's own layout changes when the SDK reports them, and the
+    // frame size either way.
+    if (typeof D.onLayoutChange === 'function') {
+      try { D.onLayoutChange(scheduleActivityLayout); } catch (e) {}
+    }
+    window.addEventListener('resize', scheduleActivityLayout);
+    scheduleActivityLayout();
     return true;
   }
 
@@ -2401,6 +2469,8 @@
     if (Array.isArray(list)) channelPeople = list;
     const note = $('activity-note');
     if (!activityMode || !note) return;
+    // Only meaningful while we are actually in the channel's own game.
+    if (gameState && gameState.activity === false) { note.style.display = 'none'; return; }
     const here = gameState ? gameState.players.length : 0;
     const inChannel = channelPeople.length;
     note.style.display = 'block';
@@ -2440,9 +2510,57 @@
     window.MiviDiscord.setActivity({
       details,
       state,
-      partySize: s.players.length,
+      partySize: s.players.filter(p => p.connected !== false).length,
       partyMax: s.options.maxPlayers,
+      // "Playing for 12:34" on the profile, counted from when we joined.
+      startedAt: presenceStartedAt,
+      largeText: s.managed ? 'Public match' : 'Room ' + s.code,
     });
+  }
+
+  function createCustomFromActivity() {
+    if (!socket) return;
+    sfx('click');
+    if (roomCode) socket.emit('leaveRoom');
+    roomCode = null;
+    gameState = null;
+    API.lsDel('mivi_room');
+    exitFocusMode();
+    socket.emit('createRoom', { name: ensureName(), avatar: myAvatar() });
+  }
+
+  // Discord can pop the activity out into a small window. When it is that
+  // small there is no room for the side panels, so the drawing takes over —
+  // and it goes back to normal when the frame grows again. A manual toggle
+  // wins until the size changes again.
+  let autoFocusOn = false;
+  let autoFocusTimer = null;
+
+  function activityIsSmall() {
+    if (window.MiviDiscord && typeof window.MiviDiscord.isSmall === 'function') {
+      try { if (window.MiviDiscord.isSmall()) return true; } catch (e) {}
+    }
+    const h = (window.visualViewport && window.visualViewport.height) || window.innerHeight;
+    const w = (window.visualViewport && window.visualViewport.width) || window.innerWidth;
+    return h < 620 || w < 900;
+  }
+
+  function syncActivityLayout() {
+    if (!activityMode) return;
+    const inGame = $('screen-game').classList.contains('active');
+    const small = inGame && activityIsSmall();
+    if (small && !document.body.classList.contains('focus-mode')) {
+      autoFocusOn = true;
+      enterFocusMode();
+    } else if (!small && autoFocusOn && document.body.classList.contains('focus-mode')) {
+      autoFocusOn = false;
+      exitFocusMode();
+    }
+  }
+
+  function scheduleActivityLayout() {
+    clearTimeout(autoFocusTimer);
+    autoFocusTimer = setTimeout(syncActivityLayout, 120);
   }
 
   function rejoinActivityGame() {
@@ -2729,7 +2847,7 @@
         const take = el('button', null, '🗑️');
         take.title = 'Take this list down (moderator)';
         take.onclick = async () => {
-          if (!confirm(`Take "${l.name}" down? It disappears for everyone.`)) return;
+          if (!await MiviDialog.confirm(`Take "${l.name}" down? It disappears for everyone.`, { confirmLabel: 'Take it down', danger: true })) return;
           try { await API.libraryDelete(l.id); toast('🗑️ Taken down'); refreshLibrary(); }
           catch (e) { toast('❌ ' + e.message); }
         };
@@ -2738,7 +2856,7 @@
           const ban = el('button', null, '🚫');
           ban.title = 'Stop ' + l.author + ' sharing lists';
           ban.onclick = async () => {
-            const reason = prompt('Why is ' + l.author + ' being banned from sharing? (optional)');
+            const reason = await MiviDialog.prompt('Why is ' + l.author + ' being banned from sharing?', { title: 'Ban from sharing', placeholder: 'Reason (optional)', confirmLabel: 'Ban' });
             if (reason === null) return;
             try {
               const res = await API.modBan(l.ownerId, reason);
@@ -2754,7 +2872,7 @@
         const ren = el('button', null, '✏️');
         ren.title = 'Rename this list';
         ren.onclick = async () => {
-          const name = prompt('New name for this list:', l.name);
+          const name = await MiviDialog.prompt('New name for this list:', { title: 'Rename list', value: l.name, confirmLabel: 'Rename' });
           if (name === null) return;
           try { await API.libraryRename(l.id, name.trim()); toast('✏️ Renamed'); refreshLibrary(); }
           catch (e) { toast('❌ ' + e.message); }
@@ -2763,7 +2881,7 @@
         const del = el('button', null, '🗑️');
         del.title = 'Take it down';
         del.onclick = async () => {
-          if (!confirm(`Take "${l.name}" out of the library?`)) return;
+          if (!await MiviDialog.confirm(`Take "${l.name}" out of the library?`, { confirmLabel: 'Remove', danger: true })) return;
           try { await API.libraryDelete(l.id); refreshLibrary(); } catch (e) { toast('❌ ' + e.message); }
         };
         row.appendChild(del);
@@ -2890,8 +3008,8 @@
     if (window.MiviAccount.isLoggedIn()) window.MiviAccount.refreshLists();
 
     // ── Wire home ──
-    $('brand-home').addEventListener('click', () => {
-      if (roomCode && !confirm('Leave the current room?')) return;
+    $('brand-home').addEventListener('click', async () => {
+      if (roomCode && !await MiviDialog.confirm('Leave the current room?', { confirmLabel: 'Leave' })) return;
       leaveToHome();
     });
     $('btn-quickplay').addEventListener('click', () => {
@@ -3114,15 +3232,16 @@
 
     buildOptionHelp();
     gateComboLock();
-    $('btn-leave').addEventListener('click', () => {
+    $('btn-leave').addEventListener('click', async () => {
       if (!roomCode) return;
-      if (gameState && gameState.state !== 'lobby' && !confirm('Leave the game?')) return;
+      if (gameState && gameState.state !== 'lobby'
+        && !await MiviDialog.confirm('Leave the game?', { confirmLabel: 'Leave', danger: true })) return;
       sfx('click');
       leaveToHome();
     });
     $('btn-gif').addEventListener('click', exportGameGif);
-    $('btn-endgame').addEventListener('click', () => {
-      if (!confirm('End the game now and go to the final scores?')) return;
+    $('btn-endgame').addEventListener('click', async () => {
+      if (!await MiviDialog.confirm('End the game now and jump to the final scores?', { title: 'End the game', confirmLabel: 'End it', danger: true })) return;
       sfx('click');
       socket.emit('endGameNow');
     });
@@ -3135,6 +3254,8 @@
     if (activityMode) {
       $('btn-rejoin-activity').style.display = 'block';
       $('btn-rejoin-activity').addEventListener('click', rejoinActivityGame);
+      $('btn-activity-custom').addEventListener('click', createCustomFromActivity);
+      $('btn-activity-back').addEventListener('click', rejoinActivityGame);
     }
     $('modal-gamesettings').addEventListener('mousedown', (e) => {
       if (e.target === $('modal-gamesettings')) closeGameSettings();

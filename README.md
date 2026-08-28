@@ -40,6 +40,19 @@ The code side is already done for you. Once Discord credentials are configured, 
 
 It stays a completely normal website at the same time — none of the above changes anything when you open it in a browser.
 
+## Privacy policy and terms
+
+Template documents live in [docs/PRIVACY.md](docs/PRIVACY.md) and
+[docs/TERMS.md](docs/TERMS.md). They describe what this software actually stores,
+but they have bracketed placeholders (operator name, contact address,
+jurisdiction) you must fill in, and they are **not legal advice** — get them
+reviewed before relying on them.
+
+The server publishes both at `/docs/PRIVACY.md` and `/docs/TERMS.md`, and the
+home screen links to them. Discord's Developer Portal asks for a Terms of Service
+URL and a Privacy Policy URL under **General Information** — point those at
+`https://yourgame.example/docs/TERMS.md` and `.../docs/PRIVACY.md`.
+
 ## Deploying it (Railway)
 
 Railpack builds this straight from `package.json` — no config files needed — but **`package.json` has to sit at the repo root**. If you ever see *"Railpack could not determine how to build the app"* and the contents it analyzed are just a folder name, that's a nested directory: either move the project up a level, or set the service's **Root Directory** to that subfolder.

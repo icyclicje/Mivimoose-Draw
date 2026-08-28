@@ -11,6 +11,7 @@ const { Server } = require('socket.io');
 const api = require('./lib/api');
 const game = require('./lib/game');
 const config = require('./lib/config');
+const fonts = require('./lib/fonts');
 
 // Discord embeds an Activity in an iframe served from *.discordsays.com, so
 // the anti-framing headers have to make room for it. Everything else stays.
@@ -37,20 +38,34 @@ app.use((req, res, next) => {
   res.setHeader('Content-Security-Policy', [
     "default-src 'self'",
     "script-src 'self'",
-    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
-    "font-src https://fonts.gstatic.com",
-    "img-src 'self' data: blob:",
+    "style-src 'self' 'unsafe-inline'",
+    "font-src 'self'",
+    // Discord profile pictures (their CDN is exempt from the Activity's own
+    // sandbox CSP, and this covers the plain website).
+    "img-src 'self' data: blob: https://cdn.discordapp.com https://media.discordapp.net",
     "connect-src 'self' ws: wss:",
     FRAME_ANCESTORS,
   ].join('; '));
   next();
 });
 
+// Webfonts are proxied through our own origin. Google's URLs are absolute and
+// cross-origin, which the Discord Activity sandbox blocks outright — serving
+// them ourselves is what keeps the game's typography inside Discord.
+app.use('/fonts', fonts.router);
+
 app.use(compression()); // gzip/br for HTML, CSS, JS, JSON
 app.use(express.json({ limit: '8mb' })); // drawings arrive as base64 PNGs
 app.use('/api', api);
 // Static assets: short cache with revalidation, so updates still land quickly.
 app.use(express.static(path.join(__dirname, 'public'), { maxAge: '10m', etag: true }));
+// The privacy policy and terms, so the in-app links (and Discord's Developer
+// Portal fields) can point at a real URL.
+app.use('/docs', express.static(path.join(__dirname, 'docs'), {
+  maxAge: '1h',
+  extensions: ['md'],
+  setHeaders: (res) => res.setHeader('Content-Type', 'text/plain; charset=utf-8'),
+}));
 
 // Invite links (/?join=CODE) and everything else land on the app.
 app.get('/', (req, res) => {
@@ -63,4 +78,6 @@ const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
   console.log(`🎨 Mivimoose Draw running on http://localhost:${PORT}`);
   if (config.activityEnabled) console.log('🎮 Discord Activity support is on — see docs/DISCORD_ACTIVITY.md');
+  // Pull the font files down once up front so the first player does not wait.
+  fonts.warm();
 });

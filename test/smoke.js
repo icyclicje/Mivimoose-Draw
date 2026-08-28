@@ -889,6 +889,22 @@ async function main() {
       check('single words behave as before', S.matches('elephnat', 'elephant', 1).ok && !S.matches('cat', 'bat', 1).ok);
     }
 
+    // ═══ 7d11b. Discord profile pictures + player counts ═══
+    console.log('— profile pictures —');
+    { const auth = require('../lib/auth');
+      check('avatar url from a hash', auth.discordAvatarUrl('123456789012345678','abc') === 'https://cdn.discordapp.com/avatars/123456789012345678/abc.png?size=128');
+      check('animated avatars use .gif', auth.discordAvatarUrl('123456789012345678', 'a_abc').endsWith('a_abc.gif?size=128'));
+      const dfltAvatar = auth.discordAvatarUrl('123456789012345678', null);
+      check('no avatar falls back to a default',
+        dfltAvatar.startsWith('https://cdn.discordapp.com/embed/avatars/') && dfltAvatar.endsWith('.png'), dfltAvatar);
+    }
+    const PA = connect({ token, guestKey: '7'.repeat(32), name: 'Pictured' });
+    await once(PA, 'welcome');
+    p = once(PA, 'roomCreated'); PA.emit('createRoom', { name: 'Pictured' }); const paState = (await p).state;
+    check('room state carries avatarUrl for players', 'avatarUrl' in paState.players[0], JSON.stringify(Object.keys(paState.players[0])));
+    check('a guest-created account has no picture', paState.players[0].avatarUrl === null || typeof paState.players[0].avatarUrl === 'string');
+    PA.disconnect();
+
     // ═══ 7d12. Host downloads every list as a zip ═══
     console.log('— list zip —');
     const ZH = connect({ guestKey: 'f'.repeat(31) + '1', name: 'Zipper' });

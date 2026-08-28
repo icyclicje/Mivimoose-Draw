@@ -69,6 +69,11 @@
  *     args { activity: { type?, details?, state?, party?: { id?, size?: [cur, max] },
  *                        timestamps?, assets?, secrets?, instance? } }
  *     NOTE: party.size is an ARRAY [current, max], not two fields.
+ *     timestamps { start?, end? }   - integers (see "TIMESTAMP UNITS" below)
+ *     assets     { large_image?, large_text?, large_url?,
+ *                  small_image?, small_text?, small_url? }
+ *     SET_ACTIVITY only accepts activity type 0 (Playing), 2 (Listening),
+ *     3 (Watching) or 5 (Competing); we always send 0.
  *   GET_ACTIVITY_INSTANCE_CONNECTED_PARTICIPANTS       (no args)
  *     data { participants: [{ id, username, global_name, discriminator, avatar,
  *                             flags, bot, nickname, ... }] }
@@ -87,6 +92,61 @@
  * Participant-change event name: ACTIVITY_INSTANCE_PARTICIPANTS_UPDATE
  * with data { participants: [...] } (same element shape as the GET_ command).
  *
+ * ─── LAYOUT MODE (added) ─────────────────────────────────────────────────────
+ * An activity is presented in one of three layouts: full-size ("focused"), a
+ * small floating window ("picture-in-picture"), or a small tile in the voice
+ * call's grid ("grid"). Exposed here as layoutMode() / onLayoutChange() /
+ * isSmall().
+ *
+ * IMPORTANT - THERE IS NO GETTER COMMAND. This was checked, not assumed:
+ * the SDK's Commands enum (src/schema/common.ts) has 41 entries and none of
+ * them is GET_ACTIVITY_LAYOUT_MODE; src/commands/ has no getActivityLayoutMode
+ * module; the SDK reference doc lists no such command. Layout mode is
+ * EVENT-ONLY - you SUBSCRIBE and wait. Discord's own playground example
+ * (embedded-app-sdk-examples sdk-playground .../pages/LayoutMode.tsx) renders
+ * an empty string until the first event arrives, for exactly this reason.
+ * So layoutMode() is null until Discord first tells us. It is NOT invented RPC.
+ *
+ *   EVENT  ACTIVITY_LAYOUT_MODE_UPDATE      data { layout_mode: <int> }
+ *     LayoutModeTypeObject: UNHANDLED -1, FOCUSED 0, PIP 1, GRID 2
+ *     -> normalised to 'focused' | 'pip' | 'grid'; UNHANDLED (-1) -> null.
+ *   EVENT  ACTIVITY_PIP_MODE_UPDATE         (LEGACY - old clients only)
+ *     The Layout dev-guide says old clients support only this event and new
+ *     clients support both, and points at the SDK helpers
+ *     subscribeToLayoutModeUpdatesCompat/unsubscribeFromLayoutModeUpdatesCompat.
+ *     Those helpers DO NOT EXIST in the SDK source (not in Discord.ts, not in
+ *     interface.ts, not exported from index.ts) and the event is not in the
+ *     Events enum nor in the SDK reference's event list - the docs and the
+ *     source disagree here. We still SUBSCRIBE to it as a cheap best-effort
+ *     (an unsupported event just answers with an ERROR frame, which we
+ *     swallow), read its boolean defensively, and IGNORE it entirely once a
+ *     real ACTIVITY_LAYOUT_MODE_UPDATE has been seen so the two cannot
+ *     fight over the value. Its payload shape is not documented anywhere we
+ *     could find; we accept is_pip_mode / pip_mode / a bare boolean.
+ *
+ * The subscription is LAZY: it is armed by the first call to layoutMode(),
+ * isSmall() or onLayoutChange(), and (like the participants one) is deferred
+ * until READY if it is asked for early, and re-armed after a CLOSE.
+ *
+ * VIEWPORT FALLBACK. Because there is no getter, there is a window - possibly
+ * a permanent one on a client that emits neither event - where layoutMode() is
+ * null. isSmall() therefore falls back to the iframe's own dimensions while the
+ * mode is unknown: small means innerWidth <= 480 AND innerHeight <= 400 (both,
+ * so a full-screen phone in portrait is not mistaken for a PIP). Tune with
+ * window.MIVI_DISCORD_SMALL_MAX_W / _H. Once Discord has told us the real mode,
+ * the RPC value wins and the dimensions are ignored. isSmall() is true for
+ * 'pip' AND 'grid' - both are small presentations.
+ *
+ * ─── TIMESTAMP UNITS (setActivity startedAt) ─────────────────────────────────
+ * The docs contradict each other: the Activity object structure says
+ * timestamps.start is "Unix time (in MILLISECONDS)", while the Rich Presence /
+ * Embedded App SDK guide's own worked example passes `start: 1723137832`, which
+ * is plainly SECONDS. We normalise: a Date, a seconds epoch and a milliseconds
+ * epoch are all accepted and we emit MILLISECONDS (the structure doc wins).
+ * Values below 1e11 are treated as seconds - a ms epoch that small would be
+ * before 1973, and a seconds epoch that large would be year 5138.
+ *
+
  * ─── ORDERING NOTES ──────────────────────────────────────────────────────────
  * onParticipantsChange(cb) may be called at ANY time - before init(), while the
  * handshake is in flight, or long after. If we are not connected yet the SUBSCRIBE
@@ -121,6 +181,24 @@
  *       - Commands enum, ReceiveFramePayload, Activity/party shape
  *     https://github.com/discord/embedded-app-sdk/blob/main/src/schema/events.ts
  *       - Events enum, DispatchEventFrame, ErrorEvent
+ *       - ACTIVITY_LAYOUT_MODE_UPDATE -> data { layout_mode }
+ *         (confirmed present at v1.2.0, v1.4.3, v2.0.0 and main;
+ *          ACTIVITY_PIP_MODE_UPDATE is absent from all of them)
+ *     https://github.com/discord/embedded-app-sdk/blob/main/src/schema/common.ts
+ *       - LayoutModeTypeObject { UNHANDLED:-1, FOCUSED:0, PIP:1, GRID:2 }
+ *         and its siblings OrientationTypeObject { UNHANDLED:-1, PORTRAIT:0,
+ *         LANDSCAPE:1 }, OrientationLockStateTypeObject { UNHANDLED:-1,
+ *         UNLOCKED:1, PORTRAIT:2, LANDSCAPE:3 }, ThermalStateTypeObject
+ *         { UNHANDLED:-1, NOMINAL:0, FAIR:1, SERIOUS:2, CRITICAL:3 }
+ *       - Activity.assets { large_image, large_text, large_url, small_image,
+ *         small_text, small_url } and Activity.timestamps { start, end }
+ *     https://github.com/discord/embedded-app-sdk/blob/main/src/commands/setActivity.ts
+ *       - "Required scopes: [rpc.activities.write]"; SetActivity picks
+ *         state/state_url/details/details_url/timestamps/assets/party/
+ *         secrets/instance/type off the Activity schema
+ *     https://github.com/discord/embedded-app-sdk-examples/blob/main/sdk-playground/packages/client/src/pages/LayoutMode.tsx
+ *       - the only official way to read layout mode: subscribe + switch on
+ *         Common.LayoutModeTypeObject
  *     https://github.com/discord/embedded-app-sdk/blob/main/src/generated/schemas.ts
  *       - AUTHENTICATE + GET_ACTIVITY_INSTANCE_CONNECTED_PARTICIPANTS payloads
  *     https://github.com/discord/embedded-app-sdk/blob/main/src/commands/
@@ -137,6 +215,32 @@
  *       - participants fetch + subscribe, avatar/name rendering
  *     https://docs.discord.com/developers/change-log  (2025-07-30 entry)
  *       - the /.proxy/ CSP change quoted above
+ *     https://docs.discord.com/developers/activities/development-guides/layout
+ *       - the three layout modes; the PIP-compat paragraph quoted above;
+ *         "Discord will publish the current orientation upon event
+ *         subscription" (said of ORIENTATION_UPDATE only - see uncertainties)
+ *     https://docs.discord.com/developers/developer-tools/embedded-app-sdk
+ *       - setActivity: "Required Scopes - rpc.activities.write"
+ *       - ACTIVITY_LAYOUT_MODE_UPDATE: "No scopes required",
+ *         sample payload { "layout_mode": 1 }
+ *       - LayoutModeTypeObject value table
+ *     https://docs.discord.com/developers/rich-presence/using-with-the-embedded-app-sdk
+ *       - the assets/timestamps/party worked example
+ *       - "Uploading Custom Assets": Developer Portal -> Rich Presence ->
+ *         Art Assets, up to 300 assets, 1024x1024 recommended, and asset keys
+ *         are LOWERCASED on upload ("Main-Game-Image" -> "main-game-image")
+ *       - "Using External Custom Assets": large_image / small_image may
+ *         instead be an external image URL, and such URLs do NOT need a URL
+ *         Mapping or the /.proxy/ prefix
+ *     https://docs.discord.com/developers/events/gateway-events (Activity object)
+ *       - Activity Timestamps "Unix time (in milliseconds)"; Activity Assets
+ *         field list
+ *     https://docs.discord.com/developers/topics/rpc
+ *       - SET_ACTIVITY argument structure, and: "In order to call any commands
+ *         over RPC, you must be authenticated or you will receive a code 4006
+ *         error response" (4006 = INVALID_PERMISSIONS in the SDK's
+ *         RPCErrorCodes). A missing scope is an ERROR FRAME, not a silent
+ *         no-op - setActivity()'s promise REJECTS.
  *
  * ─── SAFETY CONTRACT ─────────────────────────────────────────────────────────
  * Nothing here touches the page unless we are demonstrably inside a Discord
@@ -181,6 +285,28 @@
   var EVT_READY = 'READY';
   var EVT_ERROR = 'ERROR';
   var EVT_PARTICIPANTS_UPDATE = 'ACTIVITY_INSTANCE_PARTICIPANTS_UPDATE';
+  var EVT_LAYOUT_MODE_UPDATE = 'ACTIVITY_LAYOUT_MODE_UPDATE';
+  var EVT_PIP_MODE_UPDATE = 'ACTIVITY_PIP_MODE_UPDATE';   // legacy, old clients
+
+  // LayoutModeTypeObject from the SDK's src/schema/common.ts, mapped to the
+  // lowercase names this shim exposes. -1 (UNHANDLED) deliberately has no name.
+  var LAYOUT_MODE_FOCUSED = 'focused';
+  var LAYOUT_MODE_PIP = 'pip';
+  var LAYOUT_MODE_GRID = 'grid';
+
+  // Viewport fallback used only while the RPC layout mode is unknown.
+  var SMALL_MAX_W = 480;
+  var SMALL_MAX_H = 400;
+  var RESIZE_DEBOUNCE_MS = 150;
+
+  // Rich-presence field caps. Hover texts truncate harmlessly; image refs are
+  // DROPPED rather than truncated, because half a URL is worse than no image.
+  var PRESENCE_TEXT_MAX = 128;
+  var ASSET_REF_MAX = 512;
+
+  // A ms epoch below this would be before 1973; a seconds epoch above it would
+  // be year 5138. Anything under it is therefore seconds and gets promoted.
+  var SECONDS_EPOCH_CEILING = 1e11;
 
   var PROXY_PREFIX = '/.proxy';
 
@@ -234,6 +360,82 @@
     var n = typeof v === 'number' ? v : parseInt(v, 10);
     if (!isFinite(n) || n <= 0) return 0;
     return Math.floor(n);
+  }
+
+  // An asset key ("main-game-image") or an external image URL. Never truncated:
+  // a chopped URL/key would silently resolve to nothing, so an over-long value
+  // is dropped instead. Returns null when there is nothing usable.
+  function assetRef(v) {
+    if (!isStr(v)) return null;
+    var s = v.trim();
+    if (!s || s.length > ASSET_REF_MAX) return null;
+    return s;
+  }
+
+  // Accepts a Date, a ms epoch, a seconds epoch, or a parseable date string;
+  // returns MILLISECONDS (see "TIMESTAMP UNITS" in the header), or 0.
+  function epochMillis(v) {
+    var n;
+    if (Object.prototype.toString.call(v) === '[object Date]') {
+      // valueOf rather than getTime so a cross-realm Date still works.
+      n = v.valueOf();
+    } else if (typeof v === 'number') {
+      n = v;
+    } else if (isStr(v)) {
+      var t = v.trim();
+      if (!t) return 0;
+      n = /^[0-9]+$/.test(t) ? parseInt(t, 10) : Date.parse(t);
+    } else {
+      return 0;
+    }
+    if (typeof n !== 'number' || !isFinite(n) || n <= 0) return 0;
+    n = Math.floor(n);
+    if (n < SECONDS_EPOCH_CEILING) n = n * 1000;
+    return n;
+  }
+
+  // LayoutModeTypeObject -> our lowercase names. UNHANDLED (-1) and anything
+  // unrecognised become null, i.e. "we do not know", which lets isSmall() fall
+  // back to the viewport instead of guessing.
+  function layoutModeName(v) {
+    var n = typeof v === 'number' ? v : (isStr(v) ? parseInt(v, 10) : NaN);
+    if (n === 0) return LAYOUT_MODE_FOCUSED;
+    if (n === 1) return LAYOUT_MODE_PIP;
+    if (n === 2) return LAYOUT_MODE_GRID;
+    return null;
+  }
+
+  // The legacy ACTIVITY_PIP_MODE_UPDATE payload is undocumented; be liberal.
+  function readPipFlag(data) {
+    if (typeof data === 'boolean') return data;
+    if (!isObject(data)) return null;
+    if (typeof data.is_pip_mode === 'boolean') return data.is_pip_mode;
+    if (typeof data.pip_mode === 'boolean') return data.pip_mode;
+    if (typeof data.is_pip === 'boolean') return data.is_pip;
+    return null;
+  }
+
+  function smallLimit(name, fallback) {
+    var v;
+    try { v = hasWindow ? window[name] : undefined; } catch (e) { return fallback; }
+    if (typeof v !== 'number' || !isFinite(v) || v <= 0) return fallback;
+    return v;
+  }
+
+  // Fallback for "is this a small presentation?" while the RPC mode is unknown.
+  // BOTH dimensions must be small, so a full-screen phone in portrait (narrow
+  // but tall) is not mistaken for a picture-in-picture window.
+  function viewportLooksSmall() {
+    if (!hasWindow) return false;
+    var w, h;
+    try {
+      w = window.innerWidth;
+      h = window.innerHeight;
+    } catch (e) { return false; }
+    if (typeof w !== 'number' || typeof h !== 'number') return false;
+    if (!isFinite(w) || !isFinite(h) || w <= 0 || h <= 0) return false;
+    return w <= smallLimit('MIVI_DISCORD_SMALL_MAX_W', SMALL_MAX_W) &&
+           h <= smallLimit('MIVI_DISCORD_SMALL_MAX_H', SMALL_MAX_H);
   }
 
   function makeNonce() {
@@ -365,6 +567,16 @@
   var subscribing = null;
   var subscribeWanted = false;   // a SUBSCRIBE was asked for before READY landed
 
+  var layoutModeValue = null;          // 'focused' | 'pip' | 'grid' | null (unknown)
+  var layoutListeners = [];
+  var layoutSubscribed = false;
+  var layoutSubscribing = null;
+  var layoutSubscribeWanted = false;
+  var sawLayoutEvent = false;          // once true, the legacy PIP event is ignored
+  var layoutEmitted = null;            // { mode, small } last broadcast to listeners
+  var resizeBound = false;
+  var resizeTimer = null;
+
   function buildAllowedOrigins() {
     if (allowedOrigins) return allowedOrigins;
     allowedOrigins = Object.create(null);
@@ -479,9 +691,24 @@
         debug('READY', data);
         readyWaiters.forEach(function (fn) { try { fn(); } catch (e) { /* ignore */ } });
         readyWaiters = [];
-        // Flush a subscription that was requested before the connection existed.
+        // Flush subscriptions that were requested before the connection existed.
         if (subscribeWanted) { try { ensureSubscribed(); } catch (e) { debug('deferred subscribe failed', e); } }
+        if (layoutSubscribeWanted) { try { ensureLayoutSubscribed(); } catch (e) { debug('deferred layout subscribe failed', e); } }
       }
+      return;
+    }
+    if (evt === EVT_LAYOUT_MODE_UPDATE) {
+      sawLayoutEvent = true;
+      applyLayoutMode(layoutModeName(isObject(data) ? data.layout_mode : null));
+      return;
+    }
+    if (evt === EVT_PIP_MODE_UPDATE) {
+      // The modern event is authoritative: once we have seen one, ignore this
+      // legacy one entirely so the two cannot disagree (it cannot express grid).
+      if (sawLayoutEvent) { debug('ignoring legacy pip event; layout event is live'); return; }
+      var pip = readPipFlag(data);
+      if (pip === null) { debug('unreadable legacy pip payload', data); return; }
+      applyLayoutMode(pip ? LAYOUT_MODE_PIP : LAYOUT_MODE_FOCUSED);
       return;
     }
     if (evt === EVT_PARTICIPANTS_UPDATE) {
@@ -547,6 +774,11 @@
         // (or a later participants() call) resubscribes instead of assuming it holds.
         subscribed = false;
         subscribeWanted = participantListeners.length > 0;
+        // Same for the layout subscription. We keep the last known mode (the
+        // presentation did not change just because the socket died) but re-arm
+        // if anyone still cares, or if anyone had already asked for it.
+        layoutSubscribed = false;
+        layoutSubscribeWanted = layoutSubscribeWanted || layoutListeners.length > 0 || sawLayoutEvent;
         failAllPending(err(
           'discord closed the rpc connection' +
           (isObject(payload) && isStr(payload.message) ? ': ' + payload.message : ''),
@@ -772,14 +1004,117 @@
     }
   }
 
+  // ── layout mode ────────────────────────────────────────────────────────────
+
+  function getLayoutMode() {
+    try {
+      if (!isActivity()) return null;
+      ensureLayoutSubscribed();          // lazy-arm; harmless if already armed
+    } catch (e) { debug('layoutMode arm failed', e); }
+    return layoutModeValue;
+  }
+
+  function isSmall() {
+    try {
+      if (!isActivity()) return false;
+      try { ensureLayoutSubscribed(); } catch (e) { debug('isSmall arm failed', e); }
+      if (layoutModeValue === LAYOUT_MODE_PIP || layoutModeValue === LAYOUT_MODE_GRID) return true;
+      if (layoutModeValue === LAYOUT_MODE_FOCUSED) return false;
+      // Mode still unknown - fall back to our own dimensions.
+      return viewportLooksSmall();
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function emitLayout() {
+    var mode = layoutModeValue;
+    var small = isSmall();
+    if (layoutEmitted && layoutEmitted.mode === mode && layoutEmitted.small === small) return;
+    layoutEmitted = { mode: mode, small: small };
+    // Snapshot, so a listener may register another one without joining this round.
+    var snapshot = layoutListeners.slice();
+    for (var i = 0; i < snapshot.length; i++) {
+      try { snapshot[i](mode, small); }
+      catch (e) { debug('layout listener threw', e); }
+    }
+  }
+
+  function applyLayoutMode(mode) {
+    layoutModeValue = mode;
+    debug('layout mode ->', mode);
+    emitLayout();
+  }
+
+  function onResize() {
+    try { clearTimeout(resizeTimer); } catch (e) { /* ignore */ }
+    resizeTimer = setTimeout(function () {
+      // Only meaningful while Discord has not told us the real mode; once it
+      // has, isSmall() ignores the viewport and emitLayout() dedupes anyway.
+      try { emitLayout(); } catch (e) { debug('resize emit failed', e); }
+    }, RESIZE_DEBOUNCE_MS);
+  }
+
+  function bindResize() {
+    if (resizeBound || !hasWindow || !isActivity()) return;
+    try { window.addEventListener('resize', onResize); resizeBound = true; }
+    catch (e) { debug('cannot listen for resize', e); }
+  }
+
+  function ensureLayoutSubscribed() {
+    if (layoutSubscribed) return Promise.resolve();
+    if (!live()) {
+      // Same deferral as the participants subscription: remember the intent so
+      // the SUBSCRIBE goes out the moment READY lands.
+      if (isActivity()) layoutSubscribeWanted = true;
+      return Promise.resolve();
+    }
+    layoutSubscribeWanted = false;
+    if (layoutSubscribing) return layoutSubscribing;
+
+    layoutSubscribing = sendCommand(CMD_SUBSCRIBE, undefined, EVT_LAYOUT_MODE_UPDATE)
+      .then(function () { layoutSubscribed = true; debug('subscribed to ' + EVT_LAYOUT_MODE_UPDATE); })
+      .catch(function (e) { debug('layout subscribe failed', e); })
+      .then(function () {
+        // Best-effort legacy subscription for old clients that only know the
+        // PIP event. On a client that does not know it this just comes back as
+        // an ERROR frame (INVALID_EVENT 4004), which we swallow.
+        return sendCommand(CMD_SUBSCRIBE, undefined, EVT_PIP_MODE_UPDATE)
+          .then(function () { debug('subscribed to legacy ' + EVT_PIP_MODE_UPDATE); })
+          .catch(function (e) { debug('legacy pip subscribe declined (expected on new clients)', e); });
+      })
+      .then(function () { layoutSubscribing = null; });
+
+    return layoutSubscribing;
+  }
+
+  function onLayoutChange(cb) {
+    if (typeof cb !== 'function') return;
+    if (layoutListeners.indexOf(cb) === -1) layoutListeners.push(cb);
+    if (!isActivity()) return;           // outside Discord: registered, never fires
+    ensureLayoutSubscribed();
+    bindResize();
+    // If we already know something, hand it over on the next tick so the caller
+    // never has to special-case "registered too late". layoutEmitted covers the
+    // case where the mode itself is unknown but the viewport fallback has
+    // already produced an answer for earlier listeners.
+    if (layoutModeValue !== null || layoutEmitted !== null) {
+      var mode = layoutModeValue;
+      var small = isSmall();
+      setTimeout(function () {
+        try { cb(mode, small); } catch (e) { debug('layout listener threw', e); }
+      }, 0);
+    }
+  }
+
   function setActivity(opts) {
     try {
       if (!live()) return Promise.resolve(undefined);
       opts = isObject(opts) ? opts : {};
 
       var activity = { type: 0 };            // 0 = Playing
-      var details = clampText(opts.details, 128);
-      var state = clampText(opts.state, 128);
+      var details = clampText(opts.details, PRESENCE_TEXT_MAX);
+      var state = clampText(opts.state, PRESENCE_TEXT_MAX);
       if (details) activity.details = details;
       if (state) activity.state = state;
 
@@ -790,6 +1125,27 @@
         activity.party = { size: [size, max] };
         if (ctx && ctx.instanceId) activity.party.id = ctx.instanceId;
       }
+
+      // timestamps.start - "Playing for 12:34" on the profile.
+      var startedAt = epochMillis(opts.startedAt);
+      if (startedAt) activity.timestamps = { start: startedAt };
+
+      // assets.* - large_image / small_image are either a Rich Presence art
+      // asset KEY uploaded in the Developer Portal (lowercased on upload) or an
+      // external image URL; either way they are passed through verbatim.
+      var assets = {};
+      var largeImage = assetRef(opts.largeImage);
+      var largeText = clampText(opts.largeText, PRESENCE_TEXT_MAX);
+      var smallImage = assetRef(opts.smallImage);
+      var smallText = clampText(opts.smallText, PRESENCE_TEXT_MAX);
+      if (largeImage) assets.large_image = largeImage;
+      if (largeText) assets.large_text = largeText;
+      if (smallImage) assets.small_image = smallImage;
+      if (smallText) assets.small_text = smallText;
+      for (var k in assets) {
+        if (Object.prototype.hasOwnProperty.call(assets, k)) { activity.assets = assets; break; }
+      }
+
       activity.instance = true;
 
       return sendCommand(CMD_SET_ACTIVITY, { activity: activity })
@@ -844,6 +1200,20 @@
     setActivity: setActivity,
     openInvite: openInvite,
     openExternalLink: openExternalLink,
+
+    // ── layout / size awareness ─────────────────────────────────────────────
+    // layoutMode()      -> 'focused' | 'pip' | 'grid' | null  (null = not in an
+    //                      activity, or Discord has not told us yet - there is
+    //                      no getter command, only the event)
+    // isSmall()         -> true in pip/grid; while the mode is unknown, falls
+    //                      back to the iframe's own dimensions. Always false
+    //                      outside an activity.
+    // onLayoutChange(cb)-> cb(mode, small) on every change, plus once with the
+    //                      current value if it is already known. Outside an
+    //                      activity it registers and never fires.
+    layoutMode: getLayoutMode,
+    isSmall: isSmall,
+    onLayoutChange: onLayoutChange,
 
     // ── extras (not part of the required contract, handy for wiring) ─────────
     // Root-relative URL helper: url('/api/rooms') -> '/.proxy/api/rooms' inside

@@ -25,6 +25,28 @@
 
   function toast(msg) { if (window.MiviApp && window.MiviApp.toast) window.MiviApp.toast(msg); }
 
+  // Fill a circle with the account's Discord picture, or its emoji avatar.
+  function paintAvatar(node, u) {
+    node.textContent = '';
+    node.classList.remove('has-photo');
+    node.style.background = (u.avatar.color || '#6C5CE7') + '33';
+    if (u.avatarUrl) {
+      node.classList.add('has-photo');
+      const img = document.createElement('img');
+      img.src = u.avatarUrl;
+      img.alt = '';
+      img.referrerPolicy = 'no-referrer';
+      img.onerror = () => {
+        node.classList.remove('has-photo');
+        node.textContent = u.avatar.emoji;
+        node.style.background = (u.avatar.color || '#6C5CE7') + '33';
+      };
+      node.appendChild(img);
+    } else {
+      node.textContent = u.avatar.emoji;
+    }
+  }
+
   // ── Boot: restore session ──
   async function init() {
     try { discordAvailable = !!(await API.authConfig()).discord; } catch (e) { discordAvailable = false; }
@@ -46,9 +68,9 @@
     const chipAvatar = $('account-chip-avatar');
     if (user) {
       chipName.textContent = user.username;
-      chipAvatar.textContent = user.avatar.emoji;
-      chipAvatar.style.background = user.avatar.color + '33';
+      paintAvatar(chipAvatar, user);
     } else {
+      chipAvatar.classList.remove('has-photo');
       chipName.textContent = 'Sign in';
       chipAvatar.textContent = '👤';
       chipAvatar.style.background = '';
@@ -83,8 +105,7 @@
   function openAccount(tab) {
     if (!user) { openAuth(); return; }
     $('acct-name').textContent = user.username;
-    $('acct-avatar').textContent = user.avatar.emoji;
-    $('acct-avatar').style.background = user.avatar.color + '33';
+    paintAvatar($('acct-avatar'), user);
     $('acct-since').textContent = 'Around since ' + new Date(user.created).toLocaleDateString();
     $('acct-autosave').checked = !!user.settings.autosaveDrawings;
     $('acct-username').value = user.username;
@@ -158,7 +179,7 @@
       const delBtn = el('button', null, '🗑️');
       delBtn.title = 'Delete';
       delBtn.onclick = async () => {
-        if (!confirm(`Delete "${list.name}"? There's no undo.`)) return;
+        if (!await MiviDialog.confirm(`Delete "${list.name}"? There's no undo.`, { confirmLabel: 'Delete', danger: true })) return;
         try { await API.deleteList(list.id); toast('List deleted.'); refreshLists(); }
         catch (e) { toast('❌ ' + e.message); }
       };
@@ -313,8 +334,8 @@
       } else {
         const rv = el('button', null, '↩️');
         rv.title = 'Take the badge back';
-        rv.onclick = () => {
-          if (!confirm('Remove ' + u.username + "'s moderator badge?")) return;
+        rv.onclick = async () => {
+          if (!await MiviDialog.confirm('Remove ' + u.username + "'s moderator badge?", { confirmLabel: 'Remove badge', danger: true })) return;
           act(() => API.modRevoke(u.id), 'Badge removed');
         };
         row.appendChild(rv);
@@ -327,8 +348,8 @@
       } else if (!u.mod) {
         const b = el('button', null, '🚫');
         b.title = 'Stop ' + u.username + ' sharing lists';
-        b.onclick = () => {
-          const reason = prompt('Why is ' + u.username + ' being banned from sharing? (optional)');
+        b.onclick = async () => {
+          const reason = await MiviDialog.prompt('Why is ' + u.username + ' being banned from sharing?', { title: 'Ban from sharing', placeholder: 'Reason (optional)', confirmLabel: 'Ban' });
           if (reason === null) return;
           act(() => API.modBan(u.id, reason), u.username + ' can no longer share lists');
         };
@@ -389,7 +410,7 @@
       const rm = el('button', null, '🗑️');
       rm.title = 'Remove friend';
       rm.onclick = async () => {
-        if (!confirm(`Remove ${f.username} from your friends?`)) return;
+        if (!await MiviDialog.confirm(`Remove ${f.username} from your friends?`, { confirmLabel: 'Remove', danger: true })) return;
         try { await API.friendRemove(f.id); refreshFriends(); } catch (e) { toast('❌ ' + e.message); }
       };
       row.appendChild(rm);
@@ -441,7 +462,7 @@
       const del = el('button', null, '🗑️');
       del.title = 'Delete';
       del.onclick = async () => {
-        if (!confirm('Delete this drawing?')) return;
+        if (!await MiviDialog.confirm('Delete this drawing?', { confirmLabel: 'Delete', danger: true })) return;
         try { await API.deleteDrawing(d.id); refreshGallery(); } catch (e) { toast('❌ ' + e.message); }
       };
       actions.appendChild(dl);

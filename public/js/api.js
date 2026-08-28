@@ -36,6 +36,18 @@
     location.href = '/api/auth/discord';
   }
 
+  // Inside an activity even our own absolute-rooted stylesheet has to carry
+  // the proxy prefix, so point it at the right place before it loads.
+  (function fixFontHref() {
+    try {
+      const link = document.getElementById('font-css');
+      const pre = proxyPrefix();
+      if (link && pre && link.getAttribute('href') === '/fonts/css') {
+        link.setAttribute('href', pre + '/fonts/css');
+      }
+    } catch (e) {}
+  })();
+
   // Discord sign-in lands back on /#authtoken=... — grab it before anything
   // else boots so MiviAccount.init() sees the fresh session.
   (function pickupAuthFromHash() {

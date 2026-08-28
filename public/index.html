@@ -9,9 +9,9 @@
   <meta name="apple-mobile-web-app-title" content="Mivimoose Draw" />
   <title>Mivimoose Draw</title>
   <meta name="description" content="Mivimoose Draw — a modern multiplayer drawing & guessing game. Play online, build word lists, save your art." />
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+<!-- Served from this origin (see lib/fonts.js) so the fonts survive the
+       Discord Activity sandbox, which blocks cross-origin stylesheets. -->
+  <link rel="stylesheet" href="/fonts/css" id="font-css" />
   <link rel="stylesheet" href="/css/style.css" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%236C5CE7'/%3E%3Crect x='24' y='24' width='16' height='22' rx='8' fill='white'/%3E%3Crect x='21' y='36' width='22' height='12' rx='6' fill='white'/%3E%3Ccircle cx='28' cy='31' r='2' fill='%236C5CE7'/%3E%3Ccircle cx='36' cy='31' r='2' fill='%236C5CE7'/%3E%3Ccircle cx='28' cy='42' r='1.6' fill='%236C5CE7'/%3E%3Ccircle cx='36' cy='42' r='1.6' fill='%236C5CE7'/%3E%3Crect x='8' y='10' width='14' height='5' rx='2.5' fill='white' transform='rotate(-12 15 12)'/%3E%3Crect x='42' y='10' width='14' height='5' rx='2.5' fill='white' transform='rotate(12 49 12)'/%3E%3Crect x='9' y='3' width='4.5' height='12' rx='2.25' fill='white'/%3E%3Crect x='15' y='1' width='4.5' height='14' rx='2.25' fill='white'/%3E%3Crect x='50.5' y='3' width='4.5' height='12' rx='2.25' fill='white'/%3E%3Crect x='44.5' y='1' width='4.5' height='14' rx='2.25' fill='white'/%3E%3C/svg%3E" />
 </head>
@@ -132,6 +132,11 @@
     </div>
 
     <p class="home-foot">Signing in with Discord keeps your word lists, drawings and stats around. Guests can still play everything.</p>
+    <p class="home-legal">
+      <a href="/docs/PRIVACY.md" target="_blank" rel="noopener">Privacy</a>
+      <span aria-hidden="true">·</span>
+      <a href="/docs/TERMS.md" target="_blank" rel="noopener">Terms</a>
+    </p>
   </section>
 
   <!-- ══════════ LOBBY ══════════ -->
@@ -146,6 +151,8 @@
             <button class="btn btn-small" id="btn-copy-invite">🔗 Invite link</button>
           </div>
           <button class="btn btn-small btn-alt btn-wide" id="btn-lobby-friends" style="display:none">👥 Invite friends</button>
+          <button class="btn btn-small btn-wide" id="btn-activity-custom" style="display:none">✨ Start a custom game</button>
+          <button class="btn btn-small btn-alt btn-wide" id="btn-activity-back" style="display:none">🎮 Back to the channel game</button>
           <label class="toggle-row" id="public-toggle-row" style="display:none">
             <input type="checkbox" id="toggle-public" class="switch" />
             <span>List publicly<span class="toggle-hint">Anyone can find &amp; join this room</span></span>
@@ -263,6 +270,9 @@ t-shirt</pre>
   <section id="screen-game" class="screen">
     <div class="game-top card" id="game-top">
       <div class="round-pill" id="round-pill">Round 1/3</div>
+      <div class="count-pill" id="player-count" title="Players in this game">
+        <span class="count-dot"></span><span id="player-count-num">0</span>
+      </div>
       <div class="word-wrap">
         <div class="word-tiles" id="word-tiles"></div>
         <div class="word-meta" id="word-meta"></div>
@@ -647,6 +657,7 @@ t-shirt</pre>
 <canvas id="confetti" width="0" height="0"></canvas>
 
 <script src="/socket.io/socket.io.js"></script>
+<script src="/js/dialog.js"></script>
 <script src="/js/discord.js"></script>
 <script src="/js/profanity.js"></script>
 <script src="/js/gif.js"></script>
