@@ -345,6 +345,13 @@
       playTone({ freq: 1150, type: 'sine', peak: 0.11, attack: 0.001, dur: 0.06 });
     },
 
+    // "Half the clock is gone" — two falling notes, more nudge than alarm.
+    timeLow: function () {
+      playTone({ freq: 660, type: 'triangle', peak: 0.1, attack: 0.005, dur: 0.2 });
+      playTone({ delay: 0.15, freq: 495, type: 'triangle', peak: 0.1, attack: 0.005, dur: 0.28 });
+      playTone({ delay: 0.15, freq: 495, detune: -8, type: 'sine', peak: 0.04, attack: 0.005, dur: 0.3 });
+    },
+
     // Warm three-note rising arpeggio fanfare (C5 E5 G5 + octave sparkle).
     yourTurn: function () {
       var notes = [523.25, 659.25, 783.99];

@@ -581,22 +581,31 @@ input[type="color"] { width: 46px; height: 34px; border: 2px solid var(--line); 
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand) 22%, transparent);
 }
 .wl-item.on { border-color: var(--brand); }
-/* The name gets the full width of the card and may wrap to a second line;
-   the count and buttons sit on the row below it. */
+/* Three stacked rows — tick + name, then the word count and actions,
+   then the weight. Nothing shares a row it has to fight for. */
 .wl-top {
-  display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto;
-  align-items: center; gap: 6px 8px;
+  display: flex; align-items: flex-start; gap: 9px;
   cursor: pointer; font-weight: 700; font-size: 0.9rem; min-width: 0;
 }
 .wl-top .wl-name {
-  grid-column: 2; min-width: 0;
-  overflow-wrap: anywhere; line-height: 1.25;
+  flex: 1; min-width: 0;
+  overflow-wrap: anywhere; line-height: 1.3;
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
 }
-.wl-top .wl-badge { grid-column: 2; justify-self: start; }
-.wl-top .cnt { grid-column: 3; margin-left: 0; white-space: nowrap; }
-.wl-top input { accent-color: var(--brand); width: 16px; height: 16px; cursor: pointer; flex-shrink: 0; }
-.wl-top .cnt { color: var(--ink-dim); font-size: 0.72rem; font-weight: 600; margin-left: auto; }
+.wl-top input { accent-color: var(--brand); width: 16px; height: 16px; cursor: pointer; flex-shrink: 0; margin-top: 2px; }
+.wl-top .wl-badge { flex-shrink: 0; margin-top: 1px; }
+.wl-meta {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  margin-top: 7px; min-height: 22px;
+}
+.wl-meta .cnt { color: var(--ink-dim); font-size: 0.72rem; font-weight: 700; white-space: nowrap; }
+.wl-actions { display: flex; align-items: center; gap: 2px; flex-shrink: 0; }
+.wl-actions button {
+  background: none; border: none; cursor: pointer; font-size: 0.85rem;
+  opacity: .55; padding: 3px 5px; border-radius: 7px; line-height: 1;
+  transition: opacity .15s, background .15s;
+}
+.wl-actions button:hover { opacity: 1; background: var(--card); }
 .wl-badge { font-size: 0.6rem; font-weight: 800; background: var(--grad); color: #fff; border-radius: 99px; padding: 2px 7px; letter-spacing: 1px; }
 .wl-weight { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 0.72rem; color: var(--ink-dim); font-weight: 700; }
 .wl-weight input[type=range] { height: 5px; }
@@ -1420,4 +1429,110 @@ body.in-activity .btn-hero-sub { font-size: 0.74rem; }
   .lobby-players { grid-template-columns: 1fr 1fr; }
   .home-grid { gap: 10px; }
   .play-split { gap: 8px; }
+}
+
+/* ══════════ Batch 18 ══════════ */
+
+/* ── Word lists: roomier cards, calmer weight row ── */
+.wl-grid { grid-template-columns: repeat(auto-fill, minmax(228px, 1fr)); gap: 12px; }
+.wl-item { padding: 13px 15px 12px; }
+.wl-weight {
+  margin-top: 9px; padding-top: 9px; border-top: 1px solid var(--line);
+  gap: 9px;
+}
+.wl-weight-label { flex-shrink: 0; text-transform: uppercase; letter-spacing: .6px; font-size: 0.66rem; }
+.wl-weight input[type=range] { flex: 1; min-width: 0; }
+.wl-weight .wv { min-width: 14px; text-align: right; }
+.wl-item.on .wl-weight-label { color: var(--brand); }
+
+/* ── Grouped game options ── */
+.opt-section { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); }
+.opt-section:first-of-type { margin-top: 12px; padding-top: 0; border-top: none; }
+.opt-section-title {
+  font-size: 0.72rem; font-weight: 800; text-transform: uppercase; letter-spacing: 1.1px;
+  color: var(--ink-dim); margin-bottom: 11px;
+}
+.opt-section .opt-toggles { margin-top: 10px; }
+.opt-section .opt-extra { margin-bottom: 10px; }
+/* Settings that only apply when the one above them is on. */
+.toggle-row.opt-child { margin-left: 18px; position: relative; }
+.toggle-row.opt-child::before {
+  content: ''; position: absolute; left: -11px; top: 12px; bottom: 12px;
+  width: 2px; border-radius: 2px; background: var(--line);
+}
+.toggle-row.opt-child-2 { margin-left: 36px; }
+.toggle-row.dim { opacity: .45; }
+
+/* ── Spectators ── */
+.btn-spectate { width: 100%; margin-top: 4px; }
+.p-row.spec { opacity: .72; }
+.p-row.spec .sc { color: var(--ink-dim); font-weight: 700; }
+.spec-badge {
+  font-size: 0.58rem; font-weight: 800; letter-spacing: .8px;
+  background: var(--card-2); color: var(--ink-dim);
+  border: 1px solid var(--line); border-radius: 99px; padding: 2px 6px; flex-shrink: 0;
+}
+.spectating-banner {
+  display: flex; align-items: center; gap: 9px;
+  background: var(--card-2); border: 1px dashed var(--line); border-radius: var(--r-md);
+  padding: 9px 12px; font-size: 0.8rem; font-weight: 700; color: var(--ink-dim);
+  margin-bottom: 10px;
+}
+
+/* ── Relay pen ── */
+.relay-bar {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  background: var(--card-2); border: 1px solid var(--line); border-radius: var(--r-md);
+  padding: 7px 12px; font-size: 0.8rem; font-weight: 800;
+}
+.relay-bar.mine { border-color: var(--brand); background: var(--brand-soft); color: var(--brand-on-soft); }
+.relay-who { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.relay-meter { width: 84px; height: 6px; border-radius: 99px; background: var(--line); overflow: hidden; flex-shrink: 0; }
+.relay-meter i { display: block; height: 100%; background: var(--brand); border-radius: 99px; transition: width .95s linear; }
+.relay-secs { font-variant-numeric: tabular-nums; min-width: 22px; text-align: right; }
+
+/* ── The clock, running out ── */
+.timer-wrap.urgent .timer-num { color: var(--bad); }
+.timer-wrap.urgent .timer-ring-fg { stroke: var(--bad); }
+.timer-wrap.urgent { animation: timerPulse 1s ease-in-out infinite; }
+@keyframes timerPulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.08); } }
+
+/* ── The AI list generator ── */
+.wl-ai {
+  margin-top: 16px; border-top: 1px solid var(--line); padding-top: 14px;
+  display: flex; flex-direction: column; gap: 9px;
+}
+.wl-ai-badge {
+  font-size: 0.56rem; font-weight: 800; letter-spacing: 1px; vertical-align: middle;
+  background: var(--grad); color: #fff; border-radius: 99px; padding: 2px 7px; margin-left: 6px;
+}
+.wl-ai-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.wl-ai-row .input { flex: 1; min-width: 150px; }
+.ai-remember { display: flex; align-items: center; gap: 7px; font-size: 0.74rem; font-weight: 700; color: var(--ink-dim); white-space: nowrap; }
+.ai-status { font-size: 0.78rem; font-weight: 700; padding: 8px 11px; border-radius: var(--r-sm); }
+.ai-status.work { background: var(--card-2); color: var(--ink-dim); }
+.ai-status.good { background: var(--good-soft); color: var(--good); }
+.ai-status.bad { background: var(--bad-soft); color: var(--bad); }
+
+/* ── A bit more air where things were crammed ── */
+.opt-grid { gap: 12px 16px; }
+.opt-toggles { gap: 4px; }
+.toggle-row { padding: 9px 10px; border-radius: var(--r-sm); }
+.toggle-row:hover { background: var(--card-2); }
+.card-title-row { gap: 10px; flex-wrap: wrap; }
+.mini-btn-row { display: flex; gap: 6px; flex-wrap: wrap; }
+.room-actions { gap: 8px; }
+.wl-custom-row .input { min-width: 0; }
+.rooms-list { gap: 8px; }
+.final-row, .re-score-row { padding: 8px 12px; }
+
+/* ── Canvas: give the drawing the space the panels were hoarding ── */
+@media (min-width: 1081px) {
+  .game-grid { grid-template-columns: 208px minmax(0, 1fr) 296px; gap: 12px; }
+  body.in-game #main { padding: 8px 12px 10px; }
+  .canvas-card { padding: 9px; gap: 8px; }
+  .game-top { margin-bottom: 10px; }
+}
+@media (min-width: 1500px) {
+  .game-grid { grid-template-columns: 224px minmax(0, 1fr) 312px; }
 }

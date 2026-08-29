@@ -119,6 +119,7 @@
             <button class="btn btn-big" id="btn-join">Join</button>
           </div>
         </div>
+        <button class="btn btn-small btn-ghost btn-spectate" id="btn-spectate" title="Watch a room without joining the rotation">👁️ Watch instead</button>
         <button class="btn btn-big" id="btn-rejoin-activity" style="display:none">🎮 Back to your channel's game</button>
         <button class="btn btn-big btn-alt btn-library" id="btn-library">📚 List library <span class="btn-library-sub">grab word lists other people made, or share your own</span></button>
       </div>
@@ -160,6 +161,12 @@
             <input type="checkbox" id="toggle-public" class="switch" />
             <span>List publicly<span class="toggle-hint">Anyone can find &amp; join this room</span></span>
           </label>
+          <div class="spectating-banner" id="spectating-banner" style="display:none">👁️ You're watching this one — untick below to join in.</div>
+          <label class="toggle-row" id="spectate-toggle-row">
+            <input type="checkbox" id="toggle-spectate" class="switch" />
+            <span>Watch only<span class="toggle-hint">Sit this one out — you keep the chat, but skip the drawing rotation</span></span>
+          </label>
+          <button class="btn btn-small btn-alt btn-wide" id="btn-lobby-gif" style="display:none">🎬 Save last game as a GIF</button>
           <div class="autostart-banner" id="autostart-banner" style="display:none"></div>
           <div class="activity-note" id="activity-note" style="display:none"></div>
         </div>
@@ -195,6 +202,20 @@
           <p class="card-hint">Tick the lists you want in play. Crank a list's weight if you want to see it more often.</p>
           <div class="list-odds" id="list-odds" style="display:none"></div>
           <div class="wl-grid" id="wl-grid"></div>
+          <div class="wl-ai" id="wl-ai" style="display:none">
+            <div class="wl-custom-title">✨ Generate a list <span class="wl-ai-badge">MODERATOR</span></div>
+            <p class="card-hint">Name a topic and OpenAI writes you a themed list of drawable words. Your API key is used for the one request and never stored.</p>
+            <div class="wl-ai-row">
+              <input type="password" id="ai-key" class="input" placeholder="sk-…  your OpenAI API key" autocomplete="off" spellcheck="false" />
+              <label class="ai-remember"><input type="checkbox" id="ai-remember" class="switch" /><span>Remember on this device</span></label>
+            </div>
+            <div class="wl-ai-row">
+              <input type="text" id="ai-topic" class="input" placeholder="Topic — e.g. things in a kitchen" maxlength="80" />
+              <button class="btn btn-small" id="btn-ai-generate">Generate</button>
+            </div>
+            <div class="ai-status" id="ai-status" style="display:none"></div>
+          </div>
+
           <div class="wl-custom">
             <div class="wl-custom-title">Add your own list</div>
             <details class="format-tip">
@@ -215,7 +236,9 @@ t-shirt</pre>
             <div class="wl-custom-row">
               <button class="btn btn-small btn-alt" id="btn-add-list">➕ Add list</button>
               <button class="btn btn-small btn-alt" id="btn-import-list">📂 Import .txt</button>
+              <button class="btn btn-small btn-alt" id="btn-import-zip">🗜️ Import .zip</button>
               <input type="file" id="import-file" accept=".txt" multiple style="display:none" />
+              <input type="file" id="import-zip-file" accept=".zip,application/zip" style="display:none" />
               <span class="wl-mylists" id="wl-mylists" style="display:none">
                 <select id="mylists-select" class="input select"></select>
                 <button class="btn btn-small" id="btn-attach-list">Use</button>
@@ -226,35 +249,66 @@ t-shirt</pre>
 
         <div class="card" id="options-panel" style="display:none">
           <div class="card-title">🎛️ Game options</div>
-          <p class="card-hint">Tap the <b>?</b> next to any setting for what it does.</p>
-          <div class="opt-grid">
-            <div class="opt" data-help="rounds"><label>Rounds</label><input type="range" id="opt-rounds" min="1" max="10" value="10" /><span class="opt-val" id="opt-rounds-val">10</span></div>
-            <div class="opt" data-help="roundTime"><label>Draw time</label><input type="range" id="opt-roundTime" min="30" max="240" step="10" value="90" /><span class="opt-val" id="opt-roundTime-val">90s</span></div>
-            <div class="opt" data-help="wordChoices"><label>Word choices</label><input type="range" id="opt-wordChoices" min="2" max="6" value="5" /><span class="opt-val" id="opt-wordChoices-val">5</span></div>
-            <div class="opt" data-help="hintCount"><label>Hints</label><input type="range" id="opt-hintCount" min="0" max="5" value="5" /><span class="opt-val" id="opt-hintCount-val">5</span></div>
-            <div class="opt" data-help="maxPlayers"><label>Max players</label><input type="range" id="opt-maxPlayers" min="2" max="20" value="10" /><span class="opt-val" id="opt-maxPlayers-val">10</span></div>
-            <div class="opt" data-help="autocorrectStrength"><label>Autocorrect</label><input type="range" id="opt-autocorrectStrength" min="0" max="3" value="1" /><span class="opt-val" id="opt-autocorrectStrength-val">Easy</span></div>
+          <p class="card-hint">Tap the <b>?</b> beside any setting to see what it does.</p>
+
+          <div class="opt-section">
+            <div class="opt-section-title">⏱️ The match</div>
+            <div class="opt-grid">
+              <div class="opt" data-help="rounds"><label>Rounds</label><input type="range" id="opt-rounds" min="0" max="50" value="10" /><span class="opt-val" id="opt-rounds-val">10</span></div>
+              <div class="opt" data-help="roundTime"><label>Draw time</label><input type="range" id="opt-roundTime" min="30" max="240" step="10" value="90" /><span class="opt-val" id="opt-roundTime-val">90s</span></div>
+              <div class="opt" data-help="maxPlayers"><label>Max players</label><input type="range" id="opt-maxPlayers" min="2" max="20" value="10" /><span class="opt-val" id="opt-maxPlayers-val">10</span></div>
+            </div>
           </div>
-          <div class="opt-extra" data-help="canvasBackground">
-            <label>Canvas paper</label>
-            <select id="opt-canvasBackground" class="input select">
-              <option value="plain">Plain</option>
-              <option value="grid">Graph grid</option>
-              <option value="dots">Dot grid</option>
-              <option value="lined">Lined paper</option>
-            </select>
+
+          <div class="opt-section">
+            <div class="opt-section-title">🔤 Words &amp; guessing</div>
+            <div class="opt-grid">
+              <div class="opt" data-help="wordChoices"><label>Word choices</label><input type="range" id="opt-wordChoices" min="0" max="25" value="5" /><span class="opt-val" id="opt-wordChoices-val">5</span></div>
+              <div class="opt" data-help="hintCount"><label>Hints</label><input type="range" id="opt-hintCount" min="0" max="5" value="5" /><span class="opt-val" id="opt-hintCount-val">5</span></div>
+              <div class="opt" data-help="autocorrectStrength"><label>Autocorrect</label><input type="range" id="opt-autocorrectStrength" min="0" max="3" value="1" /><span class="opt-val" id="opt-autocorrectStrength-val">Easy</span></div>
+            </div>
+            <div class="opt-toggles">
+              <label class="toggle-row" data-help="hidden"><input type="checkbox" id="opt-hidden" class="switch" /><span>Hidden mode<span class="toggle-hint">No hints and no letter count</span></span></label>
+              <label class="toggle-row" data-help="showPunctuation"><input type="checkbox" id="opt-showPunctuation" class="switch" checked /><span>Show punctuation<span class="toggle-hint">Hyphens and apostrophes appear in the blanks for free</span></span></label>
+              <label class="toggle-row" data-help="avoidRepeats"><input type="checkbox" id="opt-avoidRepeats" class="switch" checked /><span>Avoid repeats<span class="toggle-hint" id="avoid-hint">Words that already came up stay out of the rotation</span></span></label>
+              <label class="toggle-row" data-help="showWordSource"><input type="checkbox" id="opt-showWordSource" class="switch" /><span>Show word source<span class="toggle-hint">Reveal which list the word came from</span></span></label>
+            </div>
           </div>
-          <div class="opt-toggles">
-            <label class="toggle-row" data-help="combinations"><input type="checkbox" id="opt-combinations" class="switch" /><span>Combinations<span class="toggle-hint">Draw two words at once</span></span></label>
-            <label class="toggle-row" data-help="lockComboParts"><input type="checkbox" id="opt-lockComboParts" class="switch" checked /><span>Lock combo parts<span class="toggle-hint">Needs Combinations on</span></span></label>
-            <label class="toggle-row" data-help="hidden"><input type="checkbox" id="opt-hidden" class="switch" /><span>Hidden mode<span class="toggle-hint">No hints or letter counts</span></span></label>
-            <label class="toggle-row" data-help="coopMode"><input type="checkbox" id="opt-coopMode" class="switch" /><span>Co-op drawing<span class="toggle-hint">Two artists per round (3+ players)</span></span></label>
-            <label class="toggle-row" data-help="sceneBackgrounds"><input type="checkbox" id="opt-sceneBackgrounds" class="switch" /><span>Scene backdrops<span class="toggle-hint">Artists can drop a scene behind their drawing</span></span></label>
-            <label class="toggle-row" data-help="lockOnGuess"><input type="checkbox" id="opt-lockOnGuess" class="switch" /><span>Pens down<span class="toggle-hint">The drawing freezes when the first person guesses</span></span></label>
-            <label class="toggle-row" data-help="textTool"><input type="checkbox" id="opt-textTool" class="switch" /><span>Text tool<span class="toggle-hint">Artists can type on the canvas</span></span></label>
-            <label class="toggle-row" data-help="showWordSource"><input type="checkbox" id="opt-showWordSource" class="switch" /><span>Show word source<span class="toggle-hint">Reveal which list the word came from</span></span></label>
-            <label class="toggle-row" data-help="avoidRepeats"><input type="checkbox" id="opt-avoidRepeats" class="switch" checked /><span>Avoid repeats<span class="toggle-hint" id="avoid-hint">Words that already came up stay out of the rotation</span></span></label>
-            <label class="toggle-row" data-help="spamProtection"><input type="checkbox" id="opt-spamProtection" class="switch" checked /><span>Spam protection<span class="toggle-hint">Mutes people who flood the chat</span></span></label>
+
+          <div class="opt-section">
+            <div class="opt-section-title">🎭 Game modes</div>
+            <div class="opt-toggles">
+              <label class="toggle-row" data-help="combinations"><input type="checkbox" id="opt-combinations" class="switch" /><span>Combinations<span class="toggle-hint">Two words to draw at once</span></span></label>
+              <label class="toggle-row opt-child" data-help="lockComboParts"><input type="checkbox" id="opt-lockComboParts" class="switch" /><span>Lock combo parts<span class="toggle-hint">Half-right guesses bank that half</span></span></label>
+              <label class="toggle-row" data-help="coopMode"><input type="checkbox" id="opt-coopMode" class="switch" /><span>Co-op drawing<span class="toggle-hint">Two artists per round (needs 3+ players)</span></span></label>
+              <label class="toggle-row opt-child" data-help="relayMode"><input type="checkbox" id="opt-relayMode" class="switch" /><span>Relay pen<span class="toggle-hint">The two artists take turns, swapping every few seconds</span></span></label>
+              <label class="toggle-row opt-child opt-child-2" data-help="relayBlind"><input type="checkbox" id="opt-relayBlind" class="switch" /><span>Blind relay<span class="toggle-hint">The second artist never finds out the word</span></span></label>
+            </div>
+          </div>
+
+          <div class="opt-section">
+            <div class="opt-section-title">🖌️ The canvas</div>
+            <div class="opt-extra" data-help="canvasBackground">
+              <label>Canvas paper</label>
+              <select id="opt-canvasBackground" class="input select">
+                <option value="plain">Plain</option>
+                <option value="grid">Graph grid</option>
+                <option value="dots">Dot grid</option>
+                <option value="lined">Lined paper</option>
+              </select>
+            </div>
+            <div class="opt-toggles">
+              <label class="toggle-row" data-help="sceneBackgrounds"><input type="checkbox" id="opt-sceneBackgrounds" class="switch" /><span>Scene backdrops<span class="toggle-hint">Artists can drop a scene behind their drawing</span></span></label>
+              <label class="toggle-row" data-help="textTool"><input type="checkbox" id="opt-textTool" class="switch" /><span>Text &amp; emoji tools<span class="toggle-hint">Artists can type and stamp on the canvas</span></span></label>
+              <label class="toggle-row" data-help="lockOnGuess"><input type="checkbox" id="opt-lockOnGuess" class="switch" /><span>Pens down<span class="toggle-hint">The drawing freezes when the first person guesses</span></span></label>
+            </div>
+          </div>
+
+          <div class="opt-section">
+            <div class="opt-section-title">🛡️ The room</div>
+            <div class="opt-toggles">
+              <label class="toggle-row" data-help="spamProtection"><input type="checkbox" id="opt-spamProtection" class="switch" checked /><span>Spam protection<span class="toggle-hint">Mutes people who flood the chat</span></span></label>
+            </div>
           </div>
         </div>
 

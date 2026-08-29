@@ -31,9 +31,16 @@
   // Where to come back to after the Discord round-trip (an invite link's
   // ?join=CODE would otherwise be lost, since OAuth returns to baseUrl).
   const RETURN_KEY = 'mivi_return_search';
+  // The OAuth redirect is a full-page navigation to discord.com. Inside an
+  // Activity the iframe is not allowed to go there and simply paints white,
+  // so this refuses to run and lets the caller fall back to the SDK.
   function beginDiscordLogin() {
+    try {
+      if (window.MiviDiscord && window.MiviDiscord.isActivity()) return false;
+    } catch (e) { /* detector not up yet — fall through to the redirect */ }
     try { sessionStorage.setItem(RETURN_KEY, location.search); } catch (e) {}
     location.href = '/api/auth/discord';
+    return true;
   }
 
   // Inside an activity even our own absolute-rooted stylesheet has to carry
@@ -154,6 +161,9 @@
     modRevoke: (userId) => req('POST', '/mod/revoke', { userId }),
     modBan: (userId, reason) => req('POST', '/mod/ban', { userId, reason }),
     modUnban: (userId) => req('POST', '/mod/unban', { userId }),
+    modGenerateList: (payload) => req('POST', '/mod/generate-list', payload),
+
+    importZip: (zip) => req('POST', '/lists/import-zip', { zip }),
 
     friends: () => req('GET', '/friends'),
     friendRequest: (code) => req('POST', '/friends/request', { code }),

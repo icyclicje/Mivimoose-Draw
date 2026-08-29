@@ -27,6 +27,9 @@
   let wasArtistThisRound = false;  // survives setArtistMode(false) at round end
   let curWordSource = null, curWordSource2 = null;
   let gameFrames = [];             // one snapshot per finished round, for the GIF
+  let gifJustSaved = false;        // don't bin the frames the instant a new game starts
+  let relayHolderId = null;        // in relay mode, the artist holding the pen
+  let blindWord = null;            // blind relay: the blanks we draw from
   let roundClockStart = 0;         // when the drawing phase began (wall clock)
   let roundFirstGuesser = null;    // who got it first this round
   let firstGuessTally = {};        // name -> how many rounds they got in first
@@ -164,7 +167,7 @@
     '#111111', '#606060', '#e5484d', '#ef6c00', '#f9a825', '#2e7d32', '#00897b', '#0277bd', '#1a237e', '#6a1b9a', '#ad1457', '#5d4037', '#b07b4f', '#ffffff',
     '#424242', '#bdbdbd', '#ff5252', '#ffab40', '#fff176', '#69f0ae', '#64ffda', '#40c4ff', '#7986cb', '#b388ff', '#ff80ab', '#8d6e63', '#f5cba7', '#fbe9d7',
   ];
-  const EMOJIS = ['🎨','🦌','🐱','🐶','🦊','🐻','🐼','🐸','🐙','🦄','🐝','🦖','🐢','🐧','🦉','🐳','🍕','🌵','👻','🤖','👽','🧙','🥷','🦩'];
+  const EMOJIS = ['🎨','🦌','🐱','🐶','🦊','🐻','🐼','🐸','🐙','🦄','🐝','🦖','🐢','🐧','🦉','🐳','🍕','🌵','👻','🤖','👽','🧙','🥷','🦩','🗿','🦆','🐌','🫠','🤡','💀','🐔','🦥','🧌','🥸','🫡','🐊'];
   const COLORS = ['#6C5CE7','#FD79A8','#00CEC9','#FDCB6E','#00B894','#E17055','#0984E3','#B33771','#6D214F','#3B3B98'];
   const ADJ = ['Sneaky','Sleepy','Speedy','Wobbly','Mighty','Dizzy','Jolly','Fuzzy','Zesty','Brave'];
   const NOUN = ['Moose','Fox','Panda','Otter','Llama','Crab','Owl','Yeti','Duck','Newt'];
@@ -335,6 +338,14 @@
 
     socket.on('roundStart', (state) => {
       gameState = state;
+      // A fresh game clears last game's GIF material — not the trip back to
+      // the lobby, where people still want to save it.
+      if ((state.round || 1) === 1 && gameFrames.length && !gifJustSaved) {
+        gameFrames = [];
+        firstGuessTally = {};
+        lastFinalScores = null;
+      }
+      gifJustSaved = false;
       roomToGameScreen();
       guessedSet = new Set();
       hasGuessed = false;
@@ -399,6 +410,8 @@
       roundClockStart = Date.now();
       roundFirstGuesser = null;
       setCanvasLocked(false);
+      renderRelayBar(null);
+      blindWord = null;
       phaseTotal = state.options.roundTime;
       setTimer(state.timeLeft);
       const amArtist = state.drawerId === myId || state.coopPartnerId === myId;
@@ -442,10 +455,36 @@
     socket.on('timerTick', ({ timeLeft }) => {
       setTimer(timeLeft);
       if (gameState && (gameState.state === 'drawing' || $('overlay-choice').style.display === 'flex')) {
-        if (timeLeft <= 10 && timeLeft > 0) {
+        // The clock gets louder as it runs out: one warning chime, then a
+        // steady tick, then an urgent countdown for the last five seconds.
+        if (timeLeft === 30) {
+          sfx('timeLow');
+          try { Audio.duck(1.4); } catch (e) {}
+        } else if (timeLeft <= 5 && timeLeft > 0) {
+          sfx('countdown');
+          try { Audio.duck(1.2); } catch (e) {}
+        } else if (timeLeft <= 10 && timeLeft > 0) {
           sfx('tick');
           try { Audio.duck(1.2); } catch (e) {}
         }
+      }
+      $('timer-wrap').classList.toggle('urgent', timeLeft <= 10 && timeLeft > 0);
+    });
+
+    // The relay baton moved (or ticked down a second).
+    socket.on('relayTurn', (info) => {
+      const wasMine = relayHolderId === myId;
+      renderRelayBar(info);
+      if (info && info.holderId === myId && !wasMine) sfx('yourTurn');
+    });
+
+    // Blind relay: we are drawing, but nobody is telling us what. All we get
+    // is the same row of blanks the guessers see.
+    socket.on('blindArtist', ({ maskedWord }) => {
+      blindWord = maskedWord || null;
+      if (blindWord) {
+        renderWordTiles(blindWord);
+        setWordMetaText('you are drawing blind — follow your partner');
       }
     });
 
@@ -543,6 +582,8 @@
       syncHostGameButtons();
       wasArtistThisRound = isArtist;
       setCanvasLocked(false);
+      renderRelayBar(null);
+      blindWord = null;
       sfx('roundEnd');
       showRoundEnd(payload);
       setArtistMode(false);
@@ -563,9 +604,10 @@
     socket.on('backToLobby', (state) => {
       closeGameSettings();
       gameState = state;
-      gameFrames = [];
-      firstGuessTally = {};
-      lastFinalScores = null;
+      // Keep the frames, the tally and the scores: the end-of-game screen
+      // only sticks around a few seconds and people want the GIF after they
+      // have finished reading the table.
+      syncLobbyGifButton();
       hideOverlay('overlay-roundend');
       hideOverlay('overlay-gameend');
       hasGuessed = false;
@@ -699,8 +741,9 @@
     const toolbarH = toolbar.style.display !== 'none' ? toolbar.offsetHeight + 12 : 0;
     const top = card.getBoundingClientRect().top;
     const vh = (window.visualViewport && window.visualViewport.height) || window.innerHeight;
-    // 24px of breathing room under the card, plus whatever the toolbar needs.
-    const avail = vh - top - toolbarH - 24;
+    // Just enough breathing room under the card to not touch the edge —
+    // every pixel saved here goes straight into the drawing.
+    const avail = vh - top - toolbarH - 10;
     const byHeight = Math.floor(avail * 4 / 3);
     const byWidth = card.clientWidth - 24;
     const maxW = Math.max(320, Math.min(byHeight, byWidth || byHeight));
@@ -854,6 +897,9 @@
       renderActivityNote();
     }
     $('toggle-public').checked = !!s.public;
+    syncSpectatorUI();
+    syncLobbyGifButton();
+    syncAiPanel();
     $('btn-start').style.display = isHost ? 'flex' : 'none';
     $('waiting-msg').style.display = isHost ? 'none' : 'block';
     $('waiting-msg').textContent = s.managed
@@ -928,6 +974,7 @@
   }
 
   function renderWordLists(wl) {
+    if (wl) wlCacheSave(roomCode, wl);
     const grid = $('wl-grid');
     // Preserve slider/checkbox state during re-render.
     const prev = {};
@@ -943,6 +990,9 @@
       const weight = p ? p.weight : (wl.weights?.[info.name] || 1);
 
       const item = el('div', 'wl-item' + (checked ? ' on' : ''));
+      // Only the tickable part is a <label>. The buttons used to live inside
+      // it too, which overflowed the row and let the label swallow clicks —
+      // they get their own row now.
       const top = el('label', 'wl-top');
       const cb = document.createElement('input');
       cb.type = 'checkbox';
@@ -953,7 +1003,14 @@
       nameEl.title = info.label || info.name;
       top.appendChild(nameEl);
       if (info.custom) top.appendChild(el('span', 'wl-badge', 'CUSTOM'));
-      top.appendChild(el('span', 'cnt', String(info.count)));
+      item.appendChild(top);
+
+      const meta = el('div', 'wl-meta');
+      meta.appendChild(el('span', 'cnt', info.count + (info.count === 1 ? ' word' : ' words')));
+      const actions = el('span', 'wl-actions');
+      meta.appendChild(actions);
+      item.appendChild(meta);
+
       if (info.custom) {
         const ren = el('button', 'wl-rename', '✏️');
         ren.title = 'Rename this list';
@@ -981,7 +1038,13 @@
           inp.focus();
           inp.select();
         };
-        top.appendChild(ren);
+        actions.appendChild(ren);
+
+        const ex = el('button', 'wl-export', '⬇️');
+        ex.title = 'Export as .txt';
+        ex.onclick = (e) => { e.preventDefault(); socket.emit('exportCustomList', { name: info.name }); };
+        actions.appendChild(ex);
+
         const rm = el('button', 'wl-remove', '🗑️');
         rm.title = 'Remove this list from the room';
         rm.onclick = async (e) => {
@@ -991,12 +1054,11 @@
           markUiBusy(0);
           socket.emit('removeCustomList', { name: info.name });
         };
-        top.appendChild(rm);
+        actions.appendChild(rm);
       }
-      item.appendChild(top);
 
       const wrow = el('div', 'wl-weight');
-      wrow.appendChild(document.createTextNode('Weight'));
+      wrow.appendChild(el('span', 'wl-weight-label', 'Weight'));
       const slider = document.createElement('input');
       slider.type = 'range';
       slider.min = '1'; slider.max = '10'; slider.value = String(weight);
@@ -1004,12 +1066,6 @@
       wrow.appendChild(slider);
       const wv = el('span', 'wv', String(weight));
       wrow.appendChild(wv);
-      if (info.custom) {
-        const ex = el('button', 'wl-export', '⬇️');
-        ex.title = 'Export as .txt';
-        ex.onclick = (e) => { e.preventDefault(); socket.emit('exportCustomList', { name: info.name }); };
-        wrow.appendChild(ex);
-      }
       item.appendChild(wrow);
 
       slider.addEventListener('pointerdown', () => markUiBusy(4000));
@@ -1082,7 +1138,7 @@
   }
 
   const OPT_KEYS = ['rounds', 'roundTime', 'wordChoices', 'hintCount', 'maxPlayers', 'autocorrectStrength'];
-  const OPT_TOGGLES = ['combinations', 'lockComboParts', 'hidden', 'coopMode', 'showWordSource', 'spamProtection', 'textTool', 'avoidRepeats', 'sceneBackgrounds', 'lockOnGuess'];
+  const OPT_TOGGLES = ['combinations', 'lockComboParts', 'hidden', 'coopMode', 'relayMode', 'relayBlind', 'showWordSource', 'spamProtection', 'textTool', 'avoidRepeats', 'sceneBackgrounds', 'lockOnGuess', 'showPunctuation'];
 
   // Plain-language explanations shown when you tap the ? next to a setting.
   const HELP = {
@@ -1103,6 +1159,9 @@
     sceneBackgrounds: "Gives whoever is drawing a 🖼️ button with ready-made backdrops — a city, a beach, space, a football pitch and plenty more. Handy when the word needs a setting; picking one clears the canvas, so pick it first.",
     canvasBackground: 'The paper everyone draws on. Grid and dot backgrounds help with proportions; the eraser puts the pattern back rather than painting over it.',
     spamProtection: 'Anyone sending more than six messages in five seconds, or the same thing three times in a row, gets muted for ten seconds. Always on in public games.',
+    relayMode: 'The two co-op artists share one pen. It swaps between them every few seconds — longer rounds get longer turns — so you are always finishing someone else\'s line. Needs Co-op drawing on.',
+    relayBlind: 'The same relay, except the second artist is never told the word. They just have to read what their partner started and run with it. Needs Relay pen on.',
+    showPunctuation: 'Hyphens and apostrophes show up in the blanks straight away, so "t-shirt" reads as _-_ _ _ _ _ instead of one long run. Turn it off to keep the shape of the word secret too.',
   };
 
   function buildOptionHelp() {
@@ -1127,18 +1186,29 @@
     });
   }
 
-  // "Lock combo parts" only means something when Combinations is on.
+  // Some toggles only mean anything when their parent is on. Dim and
+  // disable the children rather than letting people set dead settings.
   function gateComboLock() {
-    const combos = $('opt-combinations').checked;
-    const lock = $('opt-lockComboParts');
-    lock.disabled = !combos;
-    lock.closest('.toggle-row').classList.toggle('dim', !combos);
+    const dep = (childId, on) => {
+      const child = $(childId);
+      if (!child) return;
+      child.disabled = !on;
+      const row = child.closest('.toggle-row');
+      if (row) row.classList.toggle('dim', !on);
+      if (!on) child.checked = false;
+    };
+    dep('opt-lockComboParts', $('opt-combinations').checked);
+    dep('opt-relayMode', $('opt-coopMode').checked);
+    dep('opt-relayBlind', $('opt-coopMode').checked && $('opt-relayMode').checked);
   }
   const AC_LABELS = ['Off', 'Easy', 'Normal', 'Generous'];
 
   function optLabel(key, v) {
     if (key === 'roundTime') return v + 's';
     if (key === 'autocorrectStrength') return AC_LABELS[v] || v;
+    // 0 means something different for these two, so say what it means.
+    if (key === 'rounds' && Number(v) === 0) return '∞';
+    if (key === 'wordChoices' && Number(v) === 0) return 'Random';
     return String(v);
   }
 
@@ -1177,12 +1247,16 @@
     renderPlayerCount();
     const list = $('players-list');
     list.textContent = '';
-    const sorted = [...s.players].sort((a, b) => b.score - a.score);
+    // Spectators are not in the running, so they go under the players
+    // rather than being ranked among them.
+    const playing = s.players.filter(p => !p.spectator).sort((a, b) => b.score - a.score);
+    const watching = s.players.filter(p => p.spectator);
+    const sorted = playing.concat(watching);
     sorted.forEach((p, i) => {
       const isDrawing = p.id === s.currentDrawerId || p.id === s.coopPartnerId;
       const guessed = guessedSet.has(p.id) || p.guessed;
-      const row = el('div', 'p-row' + (isDrawing ? ' drawing' : '') + (guessed ? ' guessed' : '') + (p.connected === false ? ' dc' : ''));
-      row.appendChild(el('span', 'rk', '#' + (i + 1)));
+      const row = el('div', 'p-row' + (isDrawing ? ' drawing' : '') + (guessed ? ' guessed' : '') + (p.connected === false ? ' dc' : '') + (p.spectator ? ' spec' : ''));
+      row.appendChild(el('span', 'rk', p.spectator ? '👁️' : '#' + (i + 1)));
       row.appendChild(avatarNode(p, 'p-avatar'));
       const nm = el('span', 'nm', p.name + (p.id === myId ? ' (you)' : ''));
       nm.title = p.name;
@@ -1202,7 +1276,8 @@
         add.onclick = (ev) => { ev.stopPropagation(); socket.emit('friendRequest', { playerId: p.id }); };
         row.appendChild(add);
       }
-      row.appendChild(el('span', 'sc', p.score + ' pts'));
+      if (p.spectator) row.appendChild(el('span', 'spec-badge', 'WATCHING'));
+      else row.appendChild(el('span', 'sc', p.score + ' pts'));
       if (opts.bumpId === p.id) row.appendChild(el('span', 'bump', '+' + opts.bumpPts));
       list.appendChild(row);
     });
@@ -1502,6 +1577,8 @@
   // Rides on the text tool: the same room option turns both on, and a stamp
   // is just a text event whose content happens to be an emoji.
   const EMOJI_GROUPS = [
+    // The ones people actually reach for when a drawing is going badly.
+    ['Funny', ['💀','🗿','🤡','🫠','🥸','😭','🤨','🫡','😳','🤪','😵‍💫','🙃','🤌','👁️','👄','🧌','🦧','🐌','🫥','😤','🤓','🥴','😬','🫨','🤮','👺','💩','🍆','🐸','🤏','🧠','🚽']],
     ['Faces', ['😀','😂','🥹','😍','😎','🤔','😴','🤯','😭','😡','🥳','🤠','👻','💀','🤖','👽','🎃','😇','🥶','🤢']],
     ['People', ['👋','👍','👎','👏','🙏','💪','🫶','🤝','🧠','👀','👑','🧙','🥷','🧜','🧑‍🚀','🕺','💃','🤹','🏃','🧗']],
     ['Animals', ['🐶','🐱','🐭','🐹','🐰','🦊','🐻','🐼','🐨','🐯','🦁','🐮','🐷','🐸','🐵','🐔','🐧','🦆','🦉','🦇','🐺','🐗','🐴','🦄','🐝','🐛','🦋','🐌','🐞','🐢','🐍','🦎','🐙','🦑','🦀','🐠','🐬','🐳','🦈','🐊']],
@@ -1626,6 +1703,7 @@
   function startDraw(e) {
     if (!isArtist || gameState?.state !== 'drawing') return;
     if (canvasLocked) return;
+    if (relayBlocksMe()) return;
     const p = pos(e);
 
     if (currentTool === 'emoji') {
@@ -2224,7 +2302,17 @@
   // ── Whole-game GIF ──
   // Each round's drawing gets a caption strip and the Mivimoose mark, then
   // the frames are encoded to an animated GIF in the browser.
-  const GIF_W = 640, GIF_H = 520;
+  // The caption strip is deep enough for three lines on the right, so the
+  // wordmark never lands on top of the "first guess" line.
+  const GIF_W = 640, GIF_H = 536, STRIP_H = 96;
+
+  // Trim a string to fit a pixel width, with an ellipsis if it had to give.
+  function ellipsize(c, text, maxWidth) {
+    let s = String(text);
+    if (c.measureText(s).width <= maxWidth) return s;
+    while (s.length > 1 && c.measureText(s + '…').width > maxWidth) s = s.slice(0, -1);
+    return s + '…';
+  }
 
   function loadLogo() {
     return new Promise((resolve) => {
@@ -2258,39 +2346,50 @@
       c.fillStyle = '#ffffff';
       c.fillRect(0, 0, GIF_W, GIF_H);
       // The drawing, letterboxed into the top area.
-      const artH = GIF_H - 80;
+      const artH = GIF_H - STRIP_H;
       const scale = Math.min(GIF_W / img.width, artH / img.height);
       const w = Math.round(img.width * scale);
       const h = Math.round(img.height * scale);
       c.drawImage(img, Math.round((GIF_W - w) / 2), Math.round((artH - h) / 2), w, h);
-      // Caption strip.
+
+      // Caption strip. It is laid out as two columns that never overlap:
+      // the logo and word on the left, the round's stats on the right, and
+      // the wordmark tucked into the bottom-right corner on its own line.
+      const top = GIF_H - STRIP_H;
       c.fillStyle = '#1D1F3A';
-      c.fillRect(0, GIF_H - 80, GIF_W, 80);
+      c.fillRect(0, top, GIF_W, STRIP_H);
       c.textBaseline = 'middle';
+
+      const RIGHT_W = 208;                    // reserved for the stats column
+      const leftX = 76;
+      const leftW = GIF_W - RIGHT_W - leftX - 18;
+
       c.textAlign = 'left';
       c.fillStyle = '#ffffff';
-      c.font = "800 30px 'Plus Jakarta Sans', system-ui, sans-serif";
-      c.fillText(String(f.word).slice(0, 26), 84, GIF_H - 50);
+      c.font = "800 29px 'Plus Jakarta Sans', system-ui, sans-serif";
+      c.fillText(ellipsize(c, String(f.word), leftW), leftX, top + 30);
+
       c.fillStyle = '#B9B3F5';
-      c.font = "600 18px 'Plus Jakarta Sans', system-ui, sans-serif";
-      let sub = 'drawn by ' + String(f.artist).slice(0, 22);
-      if (f.seconds) sub += '   ·   ' + f.seconds + 's';
-      c.fillText(sub, 84, GIF_H - 24);
+      c.font = "600 17px 'Plus Jakarta Sans', system-ui, sans-serif";
+      let sub = 'drawn by ' + f.artist;
+      if (f.seconds) sub += '  ·  ' + f.seconds + 's';
+      c.fillText(ellipsize(c, sub, leftW), leftX, top + 60);
+
       c.textAlign = 'right';
       c.fillStyle = '#8E93B8';
-      c.font = "700 17px 'Plus Jakarta Sans', system-ui, sans-serif";
-      c.fillText(guessPhrase(f.guessed, f.total), GIF_W - 18, GIF_H - 58);
+      c.font = "700 16px 'Plus Jakarta Sans', system-ui, sans-serif";
+      c.fillText(ellipsize(c, guessPhrase(f.guessed, f.total), RIGHT_W), GIF_W - 18, top + 26);
       if (f.first) {
         c.fillStyle = '#7BE0C0';
         c.font = "700 15px 'Plus Jakarta Sans', system-ui, sans-serif";
-        c.fillText('⚡ ' + String(f.first).slice(0, 22) + ' first', GIF_W - 18, GIF_H - 34);
+        c.fillText(ellipsize(c, '⚡ ' + f.first + ' first', RIGHT_W), GIF_W - 18, top + 50);
       }
-      c.textAlign = 'left';
-      if (logo) c.drawImage(logo, 16, GIF_H - 68, 56, 56);
-      c.textAlign = 'right';
+      // Its own line at the bottom, clear of everything above it.
       c.fillStyle = '#6C6F91';
-      c.font = "700 15px 'Plus Jakarta Sans', system-ui, sans-serif";
-      c.fillText('Mivimoose Draw', GIF_W - 18, GIF_H - 34);
+      c.font = "700 14px 'Plus Jakarta Sans', system-ui, sans-serif";
+      c.fillText('Mivimoose Draw', GIF_W - 18, top + STRIP_H - 16);
+
+      if (logo) c.drawImage(logo, 16, top + 22, 48, 48);
       frames.push(cv);
     }
 
@@ -2363,27 +2462,37 @@
     return cv;
   }
 
-  async function exportGameGif() {
+  // Called from the end-of-game screen and from the lobby. Only the former
+  // has the progress bar, so the lobby button narrates on itself instead.
+  async function exportGameGif(fromBtn) {
     if (!gameFrames.length) return;
     if (!window.MiviGIF) { toast("The GIF maker didn't load — try a refresh."); return; }
-    const btn = $('btn-gif');
+    const btn = fromBtn || $('btn-gif');
+    const inOverlay = btn === $('btn-gif');
     const prog = $('gif-progress');
     const fill = $('gif-bar-fill');
+    const label = btn.textContent;
+    const say = (text) => {
+      if (inOverlay) $('gif-status').textContent = text;
+      else btn.textContent = '🎬 ' + text;
+    };
     btn.disabled = true;
-    prog.style.display = 'flex';
-    fill.style.width = '0%';
-    $('gif-status').textContent = 'Collecting drawings…';
+    if (inOverlay) {
+      prog.style.display = 'flex';
+      fill.style.width = '0%';
+    }
+    say('Collecting drawings…');
     try {
       const frames = await buildGifFrames();
-      $('gif-status').textContent = 'Encoding…';
+      say('Encoding…');
       const blob = await window.MiviGIF.encode(frames, {
         width: GIF_W,
         height: GIF_H,
         delay: 250,
         repeat: 0,
         onProgress: (f) => {
-          fill.style.width = Math.round(f * 100) + '%';
-          $('gif-status').textContent = 'Encoding… ' + Math.round(f * 100) + '%';
+          if (inOverlay) fill.style.width = Math.round(f * 100) + '%';
+          say('Encoding… ' + Math.round(f * 100) + '%');
         },
       });
       const a = document.createElement('a');
@@ -2391,11 +2500,13 @@
       a.download = 'mivimoose-game.gif';
       a.click();
       setTimeout(() => URL.revokeObjectURL(a.href), 10000);
-      $('gif-status').textContent = 'Saved!';
-      fill.style.width = '100%';
+      say('Saved!');
+      if (inOverlay) fill.style.width = '100%';
       sfx('save');
+      if (!inOverlay) setTimeout(() => { btn.textContent = label; }, 2500);
     } catch (e) {
-      $('gif-status').textContent = 'That did not work: ' + e.message;
+      say('That did not work: ' + e.message);
+      if (!inOverlay) setTimeout(() => { btn.textContent = label; }, 4000);
     } finally {
       btn.disabled = false;
     }
@@ -2522,6 +2633,7 @@
       toast('Playing as a guest — tap your name to sign in with Discord.');
     }
 
+    loadChannelName();
     // Who else is in the voice channel but not yet in the game?
     D.onParticipantsChange(renderActivityNote);
     D.participants().then(renderActivityNote).catch(() => {});
@@ -2535,6 +2647,20 @@
     return true;
   }
 
+  // Ask Discord what this voice channel is called, so the room card says
+  // "#general" rather than a code nobody typed.
+  let channelName = null;
+  async function loadChannelName() {
+    if (!activityMode || !window.MiviDiscord || typeof window.MiviDiscord.channel !== 'function') return;
+    try {
+      const ch = await window.MiviDiscord.channel();
+      if (ch && ch.name) {
+        channelName = String(ch.name).slice(0, 40);
+        renderActivityNote();
+      }
+    } catch (e) { /* the permission may not be granted — no harm */ }
+  }
+
   let channelPeople = [];
   function renderActivityNote(list) {
     if (Array.isArray(list)) channelPeople = list;
@@ -2545,9 +2671,10 @@
     const here = gameState ? gameState.players.length : 0;
     const inChannel = channelPeople.length;
     note.style.display = 'block';
-    note.textContent = inChannel > here
+    const where = channelName ? `#${channelName}: ` : '';
+    note.textContent = where + (inChannel > here
       ? `${here} of ${inChannel} people in the channel are playing — the rest just need to launch the activity.`
-      : 'Everyone in the channel is in the game.';
+      : 'Everyone in the channel is in the game.');
   }
 
   // Discord shows this on the player's profile while they play.
@@ -2571,13 +2698,17 @@
       state = 'Picking a word';
     } else if (s.state === 'drawing') {
       details = `Round ${s.round}/${s.totalRounds}`;
-      state = isArtist ? 'Drawing' : 'Guessing';
+      if (amSpectator()) state = 'Watching';
+      else if (isArtist && relayHolderId) state = relayHolderId === myId ? 'Drawing (relay)' : 'Waiting for the pen';
+      else state = isArtist ? 'Drawing' : 'Guessing';
     } else if (s.state === 'roundEnd') {
       details = `Round ${s.round}/${s.totalRounds}`;
       state = 'Between rounds';
     } else if (s.state === 'gameEnd') {
       details = 'Final scores';
     }
+    // Unlimited games have no "of N" to show.
+    if (s.totalRounds === 0 && details.indexOf('Round') === 0) details = `Round ${s.round}`;
     window.MiviDiscord.setActivity({
       details,
       state,
@@ -2742,15 +2873,17 @@
   // ── Settings ──
   // Themes, in the order the theme button cycles through them.
   // 'midnight' is the default and lives on :root (no data-theme attribute).
+  // Each chip is painted in its own theme's colours, so the light themes
+  // read as light and always keep their own legible text colour.
   const THEMES = [
-    { id: 'midnight', name: 'Midnight',  emoji: '🌙', dot: '#6C5CE7' },
-    { id: 'ocean',    name: 'Ocean',     emoji: '🌊', dot: '#1E7FC2' },
-    { id: 'forest',   name: 'Forest',    emoji: '🌲', dot: '#24814F' },
-    { id: 'sunset',   name: 'Sunset',    emoji: '🌇', dot: '#D9457C' },
-    { id: 'noir',     name: 'Noir',      emoji: '🖤', dot: '#55565E' },
-    { id: 'light',    name: 'Daylight',  emoji: '☀️', dot: '#F1F2F9' },
-    { id: 'candy',    name: 'Candy',     emoji: '🍬', dot: '#EC4899' },
-    { id: 'sepia',    name: 'Parchment', emoji: '📜', dot: '#B45309' },
+    { id: 'midnight', name: 'Midnight',  emoji: '🌙', dot: '#6C5CE7', bg: '#1A1C2E', ink: '#F1F2F9' },
+    { id: 'ocean',    name: 'Ocean',     emoji: '🌊', dot: '#1E7FC2', bg: '#101F2E', ink: '#E8F2FA' },
+    { id: 'forest',   name: 'Forest',    emoji: '🌲', dot: '#24814F', bg: '#111F18', ink: '#E7F3EB' },
+    { id: 'sunset',   name: 'Sunset',    emoji: '🌇', dot: '#D9457C', bg: '#241426', ink: '#FBE9F1' },
+    { id: 'noir',     name: 'Noir',      emoji: '🖤', dot: '#55565E', bg: '#141416', ink: '#EDEDEF' },
+    { id: 'light',    name: 'Daylight',  emoji: '☀️', dot: '#6C5CE7', bg: '#FFFFFF', ink: '#23263B' },
+    { id: 'candy',    name: 'Candy',     emoji: '🍬', dot: '#EC4899', bg: '#FFF5F8', ink: '#4A2437' },
+    { id: 'sepia',    name: 'Parchment', emoji: '📜', dot: '#B45309', bg: '#F5EFE3', ink: '#3B3229' },
   ];
   const DEFAULT_THEME = 'midnight';
 
@@ -2788,6 +2921,9 @@
     for (const t of THEMES) {
       const chip = el('button', 'theme-chip');
       chip.dataset.theme = t.id;
+      // Paint the chip in the theme it offers — a swatch you can read.
+      chip.style.background = t.bg;
+      chip.style.color = t.ink;
       const dot = el('span', 'theme-dot');
       dot.style.background = t.dot;
       chip.appendChild(dot);
@@ -2865,6 +3001,173 @@
     }
     settingsMoved = false;
     $('modal-gamesettings').style.display = 'none';
+  }
+
+
+  // ══════════ Word-list cache ══════════
+  // The room's catalogue is re-sent on every state update. Remembering the
+  // last one per room means a reconnect (or a refresh) paints the lists
+  // straight away instead of flashing empty while the socket settles.
+  const WL_CACHE_KEY = 'mivi_wl_cache';
+  const WL_CACHE_MAX = 8;
+
+  function wlCacheRead() {
+    try { return JSON.parse(API.lsGet(WL_CACHE_KEY) || '{}') || {}; } catch (e) { return {}; }
+  }
+
+  function wlCacheSave(code, wl) {
+    if (!code || !wl) return;
+    try {
+      const all = wlCacheRead();
+      all[code] = { at: Date.now(), wl };
+      // Keep the cache small — the handful of rooms you actually revisit.
+      const codes = Object.keys(all).sort((a, b) => (all[b].at || 0) - (all[a].at || 0));
+      for (const old of codes.slice(WL_CACHE_MAX)) delete all[old];
+      API.lsSet(WL_CACHE_KEY, JSON.stringify(all));
+    } catch (e) { /* a full or blocked localStorage is not worth a crash */ }
+  }
+
+  function wlCacheGet(code) {
+    const entry = wlCacheRead()[code];
+    // A day old is plenty — beyond that the room has almost certainly moved on.
+    if (!entry || Date.now() - (entry.at || 0) > 24 * 60 * 60 * 1000) return null;
+    return entry.wl || null;
+  }
+
+
+  // Read a File into a bare base64 string (no data: prefix).
+  function fileToBase64(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || '').replace(/^data:[^,]*,/, ''));
+      reader.onerror = () => reject(new Error('That file could not be read.'));
+      reader.readAsDataURL(file);
+    });
+  }
+
+  // ── The moderator word-list generator ──
+  function aiStatus(kind, text) {
+    const box = $('ai-status');
+    box.style.display = text ? 'block' : 'none';
+    box.className = 'ai-status ' + kind;
+    box.textContent = text || '';
+  }
+
+  async function generateAiList() {
+    const key = $('ai-key').value.trim();
+    const topic = $('ai-topic').value.trim();
+    if (!key) return aiStatus('bad', 'Paste an OpenAI API key first.');
+    if (!topic) return aiStatus('bad', 'What should the list be about?');
+
+    // Only ever kept if they asked for it.
+    if ($('ai-remember').checked) API.lsSet('mivi_openai_key', key);
+    else API.lsDel('mivi_openai_key');
+
+    const btn = $('btn-ai-generate');
+    btn.disabled = true;
+    aiStatus('work', '✨ Writing a list about "' + topic + '" — this takes a few seconds…');
+    try {
+      const res = await API.modGenerateList({ apiKey: key, topic, targetChars: 2000 });
+      const name = topic.charAt(0).toUpperCase() + topic.slice(1);
+      socket.emit('addCustomList', { name, text: res.words.join('\n') });
+      aiStatus('good', `✅ ${res.words.length} words (${res.chars} characters) added as "${name}"` +
+        (res.removed ? ` · ${res.removed} filtered out` : ''));
+      $('ai-topic').value = '';
+      sfx('save');
+    } catch (e) {
+      aiStatus('bad', '❌ ' + e.message);
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  // The generator is a moderator tool, so it only appears for moderators.
+  // updateLobby() runs on every state update, so the answer is cached per
+  // signed-in account rather than asking the server each time.
+  let modCheck = { for: undefined, isMod: false };
+  async function syncAiPanel() {
+    const box = $('wl-ai');
+    if (!box) return;
+    const acct = window.MiviAccount;
+    const who = acct.isLoggedIn() ? acct.user().id : null;
+    if (!who) { modCheck = { for: null, isMod: false }; box.style.display = 'none'; return; }
+    if (modCheck.for === who) {
+      box.style.display = modCheck.isMod ? 'flex' : 'none';
+      return;
+    }
+    modCheck = { for: who, isMod: false };   // assume no until told otherwise
+    box.style.display = 'none';
+    try {
+      const me = await API.modMe();
+      if (modCheck.for !== who) return;      // they signed out mid-flight
+      modCheck.isMod = !!me.isMod;
+      box.style.display = me.isMod ? 'flex' : 'none';
+    } catch (e) { /* not a moderator, or offline — stays hidden */ }
+  }
+
+  // ══════════ Spectators ══════════
+  function amSpectator() {
+    const me = gameState && gameState.players.find(p => p.id === myId);
+    return !!(me && me.spectator);
+  }
+
+  // Offer last game's GIF in the lobby, so ending a game early (or just
+  // missing the countdown) does not throw the drawings away.
+  function syncLobbyGifButton() {
+    const btn = $('btn-lobby-gif');
+    if (!btn) return;
+    const can = gameFrames.length > 0 && !!window.MiviGIF;
+    btn.style.display = can ? 'block' : 'none';
+    if (can) btn.textContent = `🎬 Save last game's ${gameFrames.length} drawing${gameFrames.length === 1 ? '' : 's'} as a GIF`;
+  }
+
+  function syncSpectatorUI() {
+    const row = $('spectate-toggle-row');
+    const box = $('toggle-spectate');
+    if (!row || !box) return;
+    const s = gameState;
+    const isHost = !!(s && s.host === myId && !s.managed);
+    // The host cannot sit out — someone has to run the room.
+    row.style.display = (s && !isHost) ? 'flex' : 'none';
+    if (document.activeElement !== box) box.checked = amSpectator();
+    const banner = $('spectating-banner');
+    if (banner) banner.style.display = amSpectator() ? 'flex' : 'none';
+  }
+
+  // ══════════ Relay pen ══════════
+  function renderRelayBar(info) {
+    let bar = $('relay-bar');
+    if (!info || !info.holderId) {
+      if (bar) bar.remove();
+      relayHolderId = null;
+      return;
+    }
+    relayHolderId = info.holderId;
+    if (!bar) {
+      bar = el('div', 'relay-bar');
+      bar.id = 'relay-bar';
+      bar.innerHTML = '<span class="relay-who"></span>'
+        + '<span class="relay-meter"><i></i></span>'
+        + '<span class="relay-secs"></span>';
+      const card = $('canvas-card');
+      card.insertBefore(bar, card.firstChild);
+    }
+    const mine = info.holderId === myId;
+    bar.classList.toggle('mine', mine);
+    bar.querySelector('.relay-who').textContent = mine
+      ? '✏️ Your turn with the pen'
+      : '⏳ ' + info.holderName + ' has the pen';
+    const pct = Math.max(0, Math.min(100, (info.seconds / (info.slice || 1)) * 100));
+    bar.querySelector('.relay-meter i').style.width = pct + '%';
+    bar.querySelector('.relay-secs').textContent = info.seconds + 's';
+    // Only the artist holding the baton may actually draw.
+    if (isArtist) $('toolbar').style.display = (canvasLocked || relayBlocksMe()) ? 'none' : 'flex';
+    $('canvas-frame').classList.toggle('relay-waiting', relayBlocksMe());
+  }
+
+  // Whether this client is allowed to put marks on the canvas right now.
+  function relayBlocksMe() {
+    return !!(relayHolderId && isArtist && relayHolderId !== myId);
   }
 
   // ── List library ──
@@ -3335,7 +3638,57 @@
       sfx('click');
       leaveToHome();
     });
-    $('btn-gif').addEventListener('click', exportGameGif);
+    $('btn-gif').addEventListener('click', () => exportGameGif());
+    // ── Spectating ──
+    $('btn-spectate').addEventListener('click', () => {
+      const code = $('home-code').value.trim().toUpperCase();
+      if (!code) { $('home-error').textContent = 'Type the room code you want to watch.'; return; }
+      sfx('click');
+      socket.emit('joinRoom', { code, name: ensureName(), avatar: myAvatar(), spectate: true });
+    });
+    $('toggle-spectate').addEventListener('change', (e) => {
+      sfx('click');
+      socket.emit('setSpectator', { spectate: e.target.checked });
+    });
+
+    // ── Last game's GIF, from the lobby ──
+    $('btn-lobby-gif').addEventListener('click', () => {
+      gifJustSaved = true;
+      exportGameGif($('btn-lobby-gif'));
+    });
+
+    // ── Import a zip of .txt lists ──
+    $('btn-import-zip').addEventListener('click', () => {
+      if (!window.MiviAccount.isLoggedIn()) {
+        toast('📚 Sign in with Discord to import lists to your account.');
+        return;
+      }
+      $('import-zip-file').click();
+    });
+    $('import-zip-file').addEventListener('change', async (e) => {
+      const file = (e.target.files || [])[0];
+      e.target.value = '';
+      if (!file) return;
+      if (file.size > 8 * 1024 * 1024) { toast('❌ That zip is over the 8 MB limit.'); return; }
+      toast('🗜️ Reading ' + file.name + '…');
+      try {
+        const b64 = await fileToBase64(file);
+        const res = await API.importZip(b64);
+        const n = res.lists.length;
+        toast(`✅ Imported ${n} list${n === 1 ? '' : 's'}` + (res.skipped.length ? ` · ${res.skipped.length} skipped` : ''));
+        // They land in your account, so offer them to the room right away.
+        renderMyLists();
+        for (const l of res.lists) socket.emit('attachAccountList', { listId: l.id });
+      } catch (err) {
+        toast('❌ ' + err.message);
+      }
+    });
+
+    // ── Generate a list with OpenAI (moderators) ──
+    $('btn-ai-generate').addEventListener('click', generateAiList);
+    $('ai-key').value = API.lsGet('mivi_openai_key') || '';
+    $('ai-remember').checked = !!API.lsGet('mivi_openai_key');
+
     $('btn-endgame').addEventListener('click', async () => {
       if (!await MiviDialog.confirm('End the game now and jump to the final scores?', { title: 'End the game', confirmLabel: 'End it', danger: true })) return;
       sfx('click');

@@ -25,6 +25,19 @@ Discord is the only way to sign in — no passwords anywhere. Guests can play ev
 
 Environment variables work too and win over the file: `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`, `BASE_URL`.
 
+> **Getting "Invalid OAuth2 redirect_uri"?** That means step 3 hasn't taken. The
+> server prints the exact URL to register when it starts:
+>
+> ```
+> 🔑 Discord redirect URI (must be registered verbatim):
+>    http://localhost:3000/api/auth/discord/callback
+> ```
+>
+> Copy that line's URL into **OAuth2 → Redirects** and press **Save Changes**.
+> **[docs/DISCORD_LOGIN.md](docs/DISCORD_LOGIN.md)** covers every way the two
+> strings drift apart — trailing slashes, `127.0.0.1` vs `localhost`, a changed
+> port, the wrong application — and how to check what the server really sends.
+
 ## Run it as a Discord Activity
 
 The game can run **inside Discord**, launched from a voice channel, as well as in a browser. Full step-by-step setup is in **[docs/DISCORD_ACTIVITY.md](docs/DISCORD_ACTIVITY.md)** — the short version is: deploy it somewhere with HTTPS, enable Activities on your Discord app, and add one URL mapping pointing at your host.

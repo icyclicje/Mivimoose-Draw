@@ -93,8 +93,25 @@
     // Inside a Discord Activity the iframe may not navigate itself to
     // discord.com — that is a cross-origin navigation and the frame just goes
     // blank. Activities have to use the SDK's own authorize() instead.
-    if (window.MiviApp && window.MiviApp.isActivity && window.MiviApp.isActivity()) {
-      window.MiviApp.activitySignIn();
+    //
+    // MiviDiscord.isActivity() is the detector to trust here: it is
+    // synchronous and cached from the very first script, whereas the app's
+    // own activityMode only flips once its async boot gets that far. Asking
+    // the wrong one leaves a window where a click whitescreens the frame.
+    const D = window.MiviDiscord;
+    const inActivity = !!(D && D.isActivity && D.isActivity())
+      || !!(window.MiviApp && window.MiviApp.isActivity && window.MiviApp.isActivity());
+
+    if (inActivity) {
+      const signIn = window.MiviApp && window.MiviApp.activitySignIn;
+      if (typeof signIn === 'function') {
+        Promise.resolve(signIn()).catch(() => {
+          toast('Discord would not sign you in — you can keep playing as a guest.');
+        });
+      } else {
+        // Boot has not got that far yet. Waiting beats a blank frame.
+        toast('Still connecting to Discord — try that again in a second.');
+      }
       return;
     }
     // Full-page redirect; we come back on /#authtoken=... (see api.js).
