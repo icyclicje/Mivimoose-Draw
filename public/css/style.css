@@ -1687,3 +1687,56 @@ body.in-activity .btn-hero-sub { font-size: 0.74rem; }
   .lib-search-row { flex-direction: column; align-items: stretch; }
   .lib-sort { max-width: none; }
 }
+
+/* ══════════ Wet Paint & Tile Reveal ══════════ */
+
+/* The dry line sweeps left to right; everything behind it has set. It sits
+   above the canvas but ignores the pointer, so drawing still works. */
+.dry-overlay {
+  position: absolute; inset: 0; z-index: 6; pointer-events: none;
+  --dry: 0%;
+}
+.dry-overlay::before {
+  content: ''; position: absolute; top: 0; bottom: 0; left: 0;
+  width: var(--dry);
+  background: linear-gradient(90deg,
+    rgba(120, 100, 70, 0.10) 0%,
+    rgba(120, 100, 70, 0.05) 70%,
+    rgba(120, 100, 70, 0.14) 100%);
+  transition: width 1s linear;
+}
+.dry-edge {
+  position: absolute; top: 0; bottom: 0; left: var(--dry);
+  width: 3px; margin-left: -1.5px;
+  background: linear-gradient(180deg, #E4A11B, #C2410C);
+  box-shadow: 0 0 12px rgba(226, 161, 27, .75);
+  transition: left 1s linear;
+}
+.dry-edge::after {
+  content: '';
+  position: absolute; top: -1px; left: -4px; width: 11px; height: 11px;
+  border-radius: 99px; background: #E4A11B;
+  box-shadow: 0 0 10px rgba(226, 161, 27, .9);
+}
+
+/* The shutters guessers watch through. Each is a frosted panel that lifts. */
+.tile-shutters { position: absolute; inset: 0; z-index: 7; pointer-events: none; }
+.shutter {
+  position: absolute; display: block;
+  background: var(--card-2);
+  border: 1px solid var(--line);
+  box-shadow: inset 0 0 22px rgba(0, 0, 0, .12);
+  transition: opacity .45s ease, transform .45s ease;
+}
+/* A subtle weave so a closed panel reads as "covered", not "broken". */
+.shutter::before {
+  content: ''; position: absolute; inset: 0; opacity: .5;
+  background-image: repeating-linear-gradient(
+    45deg, transparent 0 7px, color-mix(in srgb, var(--ink) 8%, transparent) 7px 8px);
+}
+.shutter.open { opacity: 0; transform: translateY(-8%); }
+.shutter.lifting { animation: shutterUp .45s ease forwards; }
+@keyframes shutterUp {
+  0% { opacity: 1; transform: translateY(0); }
+  100% { opacity: 0; transform: translateY(-14%); }
+}

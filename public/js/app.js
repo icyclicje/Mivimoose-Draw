@@ -377,6 +377,7 @@
       hideOverlay('overlay-roundend');
       roundColor = null;
       strokeBudget = null;
+      clearModeOverlays();
       applyRoundColor();
       renderModeBanner();
       phaseTotal = state.options.pickTime || 20;
@@ -435,6 +436,9 @@
       renderRelayBar(null);
       roundColor = state.roundColor || null;
       strokeBudget = state.strokeLimit > 0 ? { used: 0, limit: state.strokeLimit } : null;
+      clearModeOverlays();
+      if (state.dryLine !== null && state.dryLine !== undefined) renderDryLine(state.dryLine);
+      if (state.tilesOpen) renderShutters(state.tilesOpen, []);
       applyRoundColor();
       renderModeBanner();
       phaseTotal = state.roundSeconds || state.options.roundTime;
@@ -512,6 +516,25 @@
         renderWordTiles(blindWord);
         setWordMetaText('you are drawing blind — follow your partner');
       }
+    });
+
+    socket.on('dryLine', ({ x }) => renderDryLine(x));
+
+    socket.on('tilesOpen', ({ open, justOpened }) => {
+      const before = openTiles ? openTiles.size : 0;
+      renderShutters(open, justOpened);
+      if (open && open.length > before && !isArtist) sfx('pop');
+    });
+
+    // The server refused a mark — say why rather than leaving them puzzled.
+    socket.on('drawBlocked', ({ reason }) => {
+      const said = {
+        dry: 'That part has dried — you can only paint ahead of the line.',
+        dryUndo: "That stroke has set. You can't take it back now.",
+        dryClear: "The paint has started setting — you can't clear it.",
+        dryScene: 'Too late for a backdrop — pick one before the paint sets.',
+      }[reason];
+      if (said) toast('🖌️ ' + said);
     });
 
     socket.on('strokeBudget', (b) => {
@@ -623,6 +646,7 @@
       renderRelayBar(null);
       roundColor = null;
       strokeBudget = null;
+      clearModeOverlays();
       applyRoundColor();
       renderModeBanner();
       syncFinishButton();
@@ -1180,7 +1204,7 @@
   }
 
   const OPT_KEYS = ['rounds', 'roundTime', 'pickTime', 'wordChoices', 'hintCount', 'hintSpeed', 'maxPlayers', 'autocorrectStrength', 'strokeLimit'];
-  const OPT_TOGGLES = ['combinations', 'lockComboParts', 'hidden', 'coopMode', 'relayMode', 'mirrorMode', 'oneColorMode', 'suddenDeath', 'randomRoundTime', 'randomWordChoices', 'showWordSource', 'spamProtection', 'textTool', 'avoidRepeats', 'sceneBackgrounds', 'lockOnGuess', 'showPunctuation'];
+  const OPT_TOGGLES = ['combinations', 'lockComboParts', 'hidden', 'coopMode', 'relayMode', 'mirrorMode', 'oneColorMode', 'suddenDeath', 'wetPaint', 'tileReveal', 'randomRoundTime', 'randomWordChoices', 'showWordSource', 'spamProtection', 'textTool', 'avoidRepeats', 'sceneBackgrounds', 'lockOnGuess', 'showPunctuation'];
 
   // Plain-language explanations shown when you tap the ? next to a setting.
   const HELP = {
@@ -1188,7 +1212,7 @@
     roundTime: 'How long the artist has per word. Time also shrinks once people start guessing right, so 90s rarely runs the full 90.',
     wordChoices: 'How many words the artist picks from at the start of their turn. More choices means fewer "I can\'t draw that" moments.',
     hintCount: 'Letters revealed over the round, spread out evenly. Never more than half the word.',
-    maxPlayers: 'Seat limit for the room. Big rooms are fun but mean more waiting between your turns.',
+    maxPlayers: 'Seat limit for the room, up to 50. Big rooms are fun but mean more waiting between your turns — past about 16 people, expect a long gap before you draw again.',
     autocorrectStrength: 'How forgiving guessing is. Off: exact spelling only. Easy: one typo on longer words, plurals forgiven. Normal: a typo on most words, two on long ones. Generous: pretty much anything close counts.',
     combinations: 'Every word is actually two words glued together, like "boat+coat". Guess them as word1+word2.',
     lockComboParts: 'In Combinations, guessing one half correctly locks it in so you only need the other. Only does anything when Combinations is on.',
@@ -1204,6 +1228,8 @@
     mirrorMode: 'Every mark lands flipped left-to-right. Your hand goes one way, the line goes the other. Chaos, and much funnier than it sounds.',
     oneColorMode: 'The palette is taken away and one colour is picked for you, fresh each round. No shading your way out of it — the eraser still works.',
     suddenDeath: 'The very first correct guess ends the round immediately. Nobody gets a leisurely second look, and the artist has to be readable fast.',
+    wetPaint: "A dry line sweeps left to right across the canvas. Paint behind it has set: no new marks, no eraser, no undo, no clearing. You get a fifth of the round free before it starts moving, and it reaches the right edge just before time. It forces you to compose in reading order — drawing the outline first, which is everyone's instinct, is exactly what it forbids.",
+    tileReveal: 'The guessers watch through twelve shutters. Two are up to start with, the rest lift in a random order, and the last is up three-quarters of the way through — so the round ends as a normal one. Marks behind a closed shutter are held on the server and arrive when it lifts, so people are guessing from a corner of an ear and half a wheel. The artist sees everything and has no idea what is still covered. The bucket fill unlocks with the last shutter.',
     strokeLimit: 'How many separate strokes the artist gets for the whole round — lift the pen too often and you run out. Off means unlimited. Around 10 is a good, painful number.',
     pickTime: 'How long the artist has to choose their word before one is picked for them.',
     hintSpeed: 'When the letters arrive. Early front-loads them so guessers get going sooner; Late holds them back for a tougher round; Even spreads them across the clock.',
@@ -1818,6 +1844,12 @@
     if (canvasLocked) return;
     if (relayBlocksMe()) return;
     const p = pos(e);
+    // Wet Paint: the server would drop these anyway — refusing here means the
+    // artist sees the boundary instead of a stroke that silently vanishes.
+    if (inDryZone(p)) {
+      toast('🖌️ That part has dried — paint ahead of the line.');
+      return;
+    }
 
     if (currentTool === 'emoji') {
       if (beginEmojiDrag(p)) drawing = true;
@@ -1872,6 +1904,7 @@
     const list = evs.length ? evs : [e];
     for (const ce of list) {
       const raw = pos(ce);
+      if (inDryZone(raw)) continue;
       // A light low-pass on the pointer takes the tremble out of a slow hand
       // without adding any lag you can feel. Fast strokes barely notice it.
       smoothX += (raw.x - smoothX) * SMOOTHING;
@@ -3432,6 +3465,11 @@
       if (s.options.mirrorMode) bits.push('🪞 Mirrored');
       if (s.options.oneColorMode && roundColor) bits.push('🎨 One colour');
       if (s.options.suddenDeath) bits.push('⚡ Sudden death');
+      if (s.options.wetPaint) bits.push(isArtist ? '🖌️ Wet paint — work right' : '🖌️ Wet paint');
+      if (s.options.tileReveal && openTiles) {
+        const shut = TILE_COLS * TILE_ROWS - openTiles.size;
+        if (shut > 0 && !isArtist) bits.push(`🪟 ${shut} shutter${shut === 1 ? '' : 's'} still down`);
+      }
       if (strokeBudget && strokeBudget.limit > 0) {
         const left = Math.max(0, strokeBudget.limit - strokeBudget.used);
         bits.push(`✏️ ${left} stroke${left === 1 ? '' : 's'} left`);
@@ -3456,6 +3494,81 @@
       // The one swatch that still means anything is the round's own colour.
       box.querySelectorAll('.swatch').forEach(sw => sw.classList.remove('active'));
     }
+  }
+
+
+  // ══════════ Wet Paint ══════════
+  // A dry line sweeps across the canvas; anything behind it has set. The
+  // server is what actually refuses the marks — this is the artist's warning
+  // so they are not drawing into a void and wondering why nothing appears.
+  let dryX = 0;
+
+  function renderDryLine(x) {
+    dryX = Math.max(0, Math.min(CANVAS_W, x || 0));
+    const box = $('dry-overlay');
+    if (!box) return;
+    const on = !!(gameState && gameState.options.wetPaint && gameState.state === 'drawing');
+    box.style.display = on ? 'block' : 'none';
+    if (on) box.style.setProperty('--dry', (dryX / CANVAS_W * 100) + '%');
+  }
+
+  // True when this point is in paint that has already set.
+  function inDryZone(p) {
+    if (!gameState || !gameState.options.wetPaint) return false;
+    return dryX > 0 && p.x < dryX + (brushSize / 2);
+  }
+
+  // ══════════ Tile Reveal ══════════
+  // Guessers watch the canvas through twelve shutters that lift one at a
+  // time. The hidden marks are never sent to them, so this is only the
+  // frosting over ground that was never painted.
+  const TILE_COLS = 4, TILE_ROWS = 3;
+  let openTiles = null;      // null = the mode is off
+
+  function buildShutters() {
+    const box = $('tile-shutters');
+    if (!box || box.dataset.built === '1') return;
+    box.dataset.built = '1';
+    for (let i = 0; i < TILE_COLS * TILE_ROWS; i++) {
+      const t = el('i', 'shutter');
+      t.dataset.tile = String(i);
+      t.style.left = ((i % TILE_COLS) / TILE_COLS * 100) + '%';
+      t.style.top = (Math.floor(i / TILE_COLS) / TILE_ROWS * 100) + '%';
+      t.style.width = (100 / TILE_COLS) + '%';
+      t.style.height = (100 / TILE_ROWS) + '%';
+      box.appendChild(t);
+    }
+  }
+
+  function renderShutters(open, justOpened) {
+    const box = $('tile-shutters');
+    if (!box) return;
+    buildShutters();
+    openTiles = open ? new Set(open) : null;
+    // The artist sees their own canvas whole — the shutters are the guessers'
+    // problem, and covering the artist's work would make the mode unplayable.
+    const on = !!(openTiles && gameState && gameState.state === 'drawing' && !isArtist);
+    box.style.display = on ? 'block' : 'none';
+    if (!on) return;
+    box.querySelectorAll('.shutter').forEach(node => {
+      const i = Number(node.dataset.tile);
+      const isOpen = openTiles.has(i);
+      node.classList.toggle('open', isOpen);
+      if (isOpen && justOpened && justOpened.indexOf(i) !== -1) {
+        node.classList.remove('lifting');
+        void node.offsetWidth;                 // restart the animation
+        node.classList.add('lifting');
+      }
+    });
+  }
+
+  function clearModeOverlays() {
+    dryX = 0;
+    openTiles = null;
+    const dry = $('dry-overlay');
+    if (dry) dry.style.display = 'none';
+    const sh = $('tile-shutters');
+    if (sh) sh.style.display = 'none';
   }
 
   // ══════════ Untimed rounds ══════════

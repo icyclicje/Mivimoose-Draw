@@ -270,7 +270,7 @@ t-shirt</pre>
             <div class="opt" data-help="pickTime"><label>Pick time</label><input type="range" id="opt-pickTime" min="5" max="60" step="5" value="20" /><span class="opt-val" id="opt-pickTime-val">20s</span></div>
             <div class="opt" data-help="hintCount"><label>Hints</label><input type="range" id="opt-hintCount" min="0" max="12" value="5" /><span class="opt-val" id="opt-hintCount-val">5</span></div>
             <div class="opt" data-help="hintSpeed"><label>Hint timing</label><input type="range" id="opt-hintSpeed" min="0" max="2" value="1" /><span class="opt-val" id="opt-hintSpeed-val">Even</span></div>
-            <div class="opt" data-help="maxPlayers"><label>Max players</label><input type="range" id="opt-maxPlayers" min="2" max="20" value="10" /><span class="opt-val" id="opt-maxPlayers-val">10</span></div>
+            <div class="opt" data-help="maxPlayers"><label>Max players</label><input type="range" id="opt-maxPlayers" min="2" max="50" value="10" /><span class="opt-val" id="opt-maxPlayers-val">10</span></div>
             <div class="opt" data-help="autocorrectStrength"><label>Autocorrect</label><input type="range" id="opt-autocorrectStrength" min="0" max="3" value="1" /><span class="opt-val" id="opt-autocorrectStrength-val">Easy</span></div>
           </div>
 
@@ -304,6 +304,8 @@ t-shirt</pre>
               <label class="toggle-row" data-help="mirrorMode"><input type="checkbox" id="opt-mirrorMode" class="switch" /><span>🪞 Mirror<span class="toggle-hint">Everything lands flipped left-to-right — draw it backwards</span></span></label>
               <label class="toggle-row" data-help="oneColorMode"><input type="checkbox" id="opt-oneColorMode" class="switch" /><span>🎨 One colour<span class="toggle-hint">A different single colour every round, no palette</span></span></label>
               <label class="toggle-row" data-help="suddenDeath"><input type="checkbox" id="opt-suddenDeath" class="switch" /><span>⚡ Sudden death<span class="toggle-hint">The first correct guess ends the round on the spot</span></span></label>
+              <label class="toggle-row" data-help="wetPaint"><input type="checkbox" id="opt-wetPaint" class="switch" /><span>🖌️ Wet paint<span class="toggle-hint">The page dries left to right — once it sets you can't touch it</span></span></label>
+              <label class="toggle-row" data-help="tileReveal"><input type="checkbox" id="opt-tileReveal" class="switch" /><span>🪟 Tile reveal<span class="toggle-hint">Guessers see the canvas through shutters that lift one by one</span></span></label>
             </div>
             <div class="opt-grid">
               <div class="opt" data-help="strokeLimit"><label>Stroke limit</label><input type="range" id="opt-strokeLimit" min="0" max="50" value="0" /><span class="opt-val" id="opt-strokeLimit-val">Off</span></div>
@@ -362,6 +364,8 @@ t-shirt</pre>
         <div class="mode-banner" id="mode-banner" style="display:none"></div>
         <button class="btn btn-small btn-done-drawing" id="btn-finish-drawing" style="display:none">🖐️ I'm done — reveal it</button>
         <div class="canvas-frame" id="canvas-frame">
+          <div class="dry-overlay" id="dry-overlay" style="display:none"><i class="dry-edge"></i></div>
+          <div class="tile-shutters" id="tile-shutters" style="display:none"></div>
           <canvas id="canvas"></canvas>
           <canvas id="canvas-preview"></canvas>
 

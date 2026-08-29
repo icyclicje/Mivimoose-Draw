@@ -15,6 +15,33 @@
 
   function fireChange() { changeHandlers.forEach(fn => { try { fn(user); } catch (e) {} }); }
 
+  // ── Remembering who you are between visits ──
+  // The token already lives in localStorage, but the account itself used to be
+  // re-fetched on every load — so every page start flashed "Sign in" for a
+  // round-trip or two. The last known account is cached alongside the token
+  // and painted immediately, then quietly revalidated against the server.
+  const USER_CACHE_KEY = 'mivi_user';
+
+  function cachedUser() {
+    if (!API.token()) return null;             // no token, no claim to an account
+    try {
+      const raw = API.lsGet(USER_CACHE_KEY);
+      if (!raw) return null;
+      const u = JSON.parse(raw);
+      // Only trust something that still looks like an account.
+      return (u && typeof u.id === 'string' && typeof u.username === 'string' && u.avatar) ? u : null;
+    } catch (e) { return null; }
+  }
+
+  // Every assignment to `user` goes through here so the cache cannot drift.
+  function setUser(u) {
+    user = u || null;
+    try {
+      if (user) API.lsSet(USER_CACHE_KEY, JSON.stringify(user));
+      else API.lsDel(USER_CACHE_KEY);
+    } catch (e) { /* a full or blocked localStorage is not worth a crash */ }
+  }
+
   // ── Small DOM helper (always textContent — never innerHTML with user data) ──
   function el(tag, className, text) {
     const node = document.createElement(tag);
@@ -49,15 +76,32 @@
 
   // ── Boot: restore session ──
   async function init() {
+    // Paint the cached account before anything is awaited, so a returning
+    // player is signed in the moment the page appears.
+    const cached = cachedUser();
+    if (cached) {
+      user = cached;
+      renderChip();
+      fireChange();
+    }
+
     try { discordAvailable = !!(await API.authConfig()).discord; } catch (e) { discordAvailable = false; }
+
     if (API.token()) {
       try {
         const data = await API.me();
-        user = data.user;
+        setUser(data.user);
       } catch (e) {
-        if (e.status === 401) API.setToken(null);
-        user = null;
+        if (e.status === 401) {
+          // The session really is gone — forget it properly.
+          API.setToken(null);
+          setUser(null);
+        }
+        // Anything else (offline, a server hiccup) is not evidence that the
+        // account is invalid, so the cached one stands.
       }
+    } else {
+      setUser(null);
     }
     renderChip();
     fireChange();
@@ -122,7 +166,7 @@
   async function signOut() {
     await API.logout();
     API.setToken(null);
-    user = null;
+    setUser(null);
     $('modal-account').style.display = 'none';
     renderChip();
     toast('Signed out. See you around!');
@@ -313,7 +357,7 @@
     btn.disabled = true;
     try {
       const data = await API.updateMe({ username: name });
-      user = data.user;
+      setUser(data.user);
       renderChip();
       toast('✏️ You are now ' + user.username);
       // A rename can hand over (or take away) the bootstrap mod badge.
@@ -522,7 +566,7 @@
       if (!user) return;
       try {
         const data = await API.updateMe({ settings: { autosaveDrawings: e.target.checked } });
-        user = data.user;
+        setUser(data.user);
       } catch (err) { toast('❌ ' + err.message); }
     });
 
@@ -565,7 +609,7 @@
       if (!user) return;
       try {
         const data = await API.updateMe({ avatar });
-        user = data.user;
+        setUser(data.user);
         renderChip();
       } catch (e) {}
     },

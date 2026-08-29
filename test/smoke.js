@@ -1153,6 +1153,15 @@ async function main() {
       check('stroke limit clamped to 50', st.options.strokeLimit === 50, String(st.options.strokeLimit));
       check('pick time clamped to 60', st.options.pickTime === 60, String(st.options.pickTime));
 
+      up = once(H, 'stateUpdate');
+      H.emit('setGameOptions', { options: { maxPlayers: 50 } });
+      st = await up;
+      check('rooms can seat up to 50', st.options.maxPlayers === 50, String(st.options.maxPlayers));
+      up = once(H, 'stateUpdate');
+      H.emit('setGameOptions', { options: { maxPlayers: 500 } });
+      st = await up;
+      check('max players clamped at 50', st.options.maxPlayers === 50, String(st.options.maxPlayers));
+
       H.disconnect();
       await sleep(150);
     }
@@ -1605,6 +1614,158 @@ async function main() {
 
       r = await rest('POST', '/drawings', { dataUrl: 'data:image/gif;base64,' + Buffer.from('NOTAGIF').toString('base64') }, tokenG);
       check('something that is not a GIF is refused', r.status === 400, JSON.stringify(r.data));
+    }
+
+
+    console.log('— wet paint —');
+    {
+      const WH = connect({ guestKey: 'cc' + Date.now().toString(16).padStart(14, '0') });
+      await once(WH, 'welcome');
+      let rp = once(WH, 'roomCreated');
+      WH.emit('createRoom', { name: 'WetHost', avatar: '🎨' });
+      const wCode = (await rp).code;
+      const WG = connect({ guestKey: 'cd' + Date.now().toString(16).padStart(14, '0') });
+      await once(WG, 'welcome');
+      rp = once(WG, 'roomJoined');
+      WG.emit('joinRoom', { code: wCode, name: 'WetGuesser', avatar: '🐱' });
+      await rp;
+
+      let up = once(WH, 'stateUpdate');
+      WH.emit('addCustomList', { name: 'Wet', text: 'rocket' });
+      await up;
+      up = once(WH, 'stateUpdate');
+      WH.emit('setWordLists', { lists: ['Wet'], weights: { Wet: 1 } });
+      await up;
+      up = once(WH, 'stateUpdate');
+      // A 30s round: the line starts moving at 20% (6s) and is right across by 95%.
+      WH.emit('setGameOptions', { options: { roundTime: 30, hintCount: 0, wordChoices: 0, wetPaint: true } });
+      const wOpts = await up;
+      check('wet paint option sticks', wOpts.options.wetPaint === true);
+
+      const ds = await (async () => {
+        const p2 = once(WG, 'drawingStart', 12000);
+        WH.emit('startGame');
+        return p2;
+      })();
+      check('the round starts with the page still wet', ds.dryLine === 0, String(ds.dryLine));
+
+      // Nothing has set yet, so a mark at the far left must land.
+      const early = once(WG, 'draw', 5000);
+      WH.emit('draw', { type: 'line', x1: 20, y1: 100, x2: 60, y2: 120, color: '#111111', size: 6 });
+      const gotEarly = await early;
+      check('you can paint anywhere while it is wet', gotEarly.x1 === 20, JSON.stringify(gotEarly.x1));
+
+      // Wait for the line to move well past the left edge.
+      let dry = { x: 0 };
+      for (let i = 0; i < 20 && dry.x < 200; i++) dry = await once(WH, 'dryLine', 4000);
+      check('the dry line sweeps across', dry.x > 0, 'x=' + dry.x);
+
+      // A mark behind the line must reach nobody.
+      let leaked = false;
+      const spy = () => { leaked = true; };
+      WG.on('draw', spy);
+      const blocked = once(WH, 'drawBlocked', 4000);
+      WH.emit('draw', { type: 'line', x1: 5, y1: 200, x2: 30, y2: 210, color: '#111111', size: 6 });
+      const why = await blocked;
+      await sleep(300);
+      WG.off('draw', spy);
+      check('set paint refuses a new mark', why && why.reason === 'dry', JSON.stringify(why));
+      check('a blocked mark reaches nobody', !leaked);
+
+      // Ahead of the line still works.
+      const ahead = once(WG, 'draw', 5000);
+      WH.emit('draw', { type: 'line', x1: 960, y1: 300, x2: 980, y2: 320, color: '#111111', size: 6 });
+      check('you can still paint ahead of the line', !!(await ahead));
+
+      // Clearing would wipe dried paint, so it is refused too.
+      const clearBlocked = once(WH, 'drawBlocked', 4000);
+      WH.emit('clearCanvas');
+      const cb = await clearBlocked;
+      check('clearing is refused once paint has set', cb && cb.reason === 'dryClear', JSON.stringify(cb));
+
+      WH.disconnect(); WG.disconnect();
+      await sleep(200);
+    }
+
+    console.log('— tile reveal —');
+    {
+      const TH = connect({ guestKey: 'ce' + Date.now().toString(16).padStart(14, '0') });
+      await once(TH, 'welcome');
+      let rp = once(TH, 'roomCreated');
+      TH.emit('createRoom', { name: 'TileHost', avatar: '🎨' });
+      const tCode = (await rp).code;
+      const TG = connect({ guestKey: 'cf' + Date.now().toString(16).padStart(14, '0') });
+      await once(TG, 'welcome');
+      rp = once(TG, 'roomJoined');
+      TG.emit('joinRoom', { code: tCode, name: 'TileGuesser', avatar: '🐱' });
+      await rp;
+
+      let up = once(TH, 'stateUpdate');
+      TH.emit('addCustomList', { name: 'Tiles', text: 'rocket' });
+      await up;
+      up = once(TH, 'stateUpdate');
+      TH.emit('setWordLists', { lists: ['Tiles'], weights: { Tiles: 1 } });
+      await up;
+      up = once(TH, 'stateUpdate');
+      TH.emit('setGameOptions', { options: { roundTime: 60, hintCount: 0, wordChoices: 0, tileReveal: true } });
+      await up;
+
+      const ds = await (async () => {
+        const p2 = once(TG, 'drawingStart', 12000);
+        TH.emit('startGame');
+        return p2;
+      })();
+      check('two shutters start up', Array.isArray(ds.tilesOpen) && ds.tilesOpen.length === 2, JSON.stringify(ds.tilesOpen));
+
+      // Find a tile that is definitely still shut, and one that is open.
+      const open = new Set(ds.tilesOpen);
+      let shutTile = -1;
+      for (let i = 0; i < 12; i++) if (!open.has(i)) { shutTile = i; break; }
+      const openTile = ds.tilesOpen[0];
+      const centreOf = (t) => ({ x: (t % 4) * 250 + 125, y: Math.floor(t / 4) * 250 + 125 });
+
+      // A mark behind a closed shutter must not reach the guesser at all.
+      let leaked = false;
+      const spy = () => { leaked = true; };
+      TG.on('draw', spy);
+      TG.on('drawBatch', spy);
+      const hidden = centreOf(shutTile);
+      TH.emit('draw', { type: 'line', x1: hidden.x, y1: hidden.y, x2: hidden.x + 10, y2: hidden.y + 10, color: '#111111', size: 6 });
+      await sleep(400);
+      TG.off('draw', spy);
+      TG.off('drawBatch', spy);
+      check('a mark behind a shutter is never sent', !leaked);
+
+      // A mark in an open tile arrives immediately.
+      const shown = centreOf(openTile);
+      const seen = once(TG, 'draw', 5000);
+      TH.emit('draw', { type: 'line', x1: shown.x, y1: shown.y, x2: shown.x + 10, y2: shown.y + 10, color: '#111111', size: 6 });
+      check('a mark in an open tile arrives', !!(await seen));
+
+      // A reconnecting guesser must not be replayed the hidden marks either.
+      const resync = once(TG, 'drawHistory', 5000);
+      TG.emit('requestState');
+      const hist = await resync;
+      const sawHidden = (hist.history || []).some(ev =>
+        Math.floor((ev.x1 ?? ev.x ?? 0) / 250) + Math.floor((ev.y1 ?? ev.y ?? 0) / 250) * 4 === shutTile);
+      check('a resync does not leak hidden marks', !sawHidden, JSON.stringify((hist.history || []).length));
+
+      // The bucket would bleed under the shutters, so it is refused.
+      const fillErr = once(TH, 'error', 4000);
+      TH.emit('draw', { type: 'fill', x: 500, y: 300, color: '#ff0000' });
+      const fe = await fillErr;
+      check('the bucket is held back until the last shutter', !!fe && /bucket|shutter/i.test(fe.message || ''), JSON.stringify(fe));
+
+      // Everything is revealed when the round ends.
+      const revealed = once(TG, 'tilesOpen', 8000);
+      const ended = once(TG, 'roundEnd', 8000);
+      TG.emit('guess', { text: 'rocket' });
+      const rv = await revealed;
+      check('every shutter lifts at the end', rv.all === true && rv.open.length === 12, JSON.stringify(rv.open.length));
+      await ended;
+
+      TH.disconnect(); TG.disconnect();
+      await sleep(200);
     }
 
   } catch (e) {
