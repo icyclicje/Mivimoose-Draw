@@ -9,6 +9,7 @@
 //
 //   await MiviDialog.confirm('Leave the game?')      -> boolean
 //   await MiviDialog.prompt('New name:', {value})    -> string | null
+//   await MiviDialog.prompt('Words:', {multiline:true}) -> a textarea; ⌘/Ctrl+Enter submits
 // ─────────────────────────────────────────────────────────────
 (function () {
   'use strict';
@@ -26,6 +27,7 @@
         '<h2 class="dialog-title"></h2>' +
         '<p class="dialog-message"></p>' +
         '<input type="text" class="input dialog-input" maxlength="120" style="display:none" />' +
+        '<textarea class="input textarea dialog-area" rows="7" maxlength="20000" style="display:none"></textarea>' +
         '<div class="dialog-actions">' +
           '<button class="btn btn-small btn-alt dialog-cancel"></button>' +
           '<button class="btn btn-small dialog-ok"></button>' +
@@ -41,6 +43,12 @@
       if (e.key === 'Enter') finish(true);
       else if (e.key === 'Escape') finish(null);
     });
+    // Enter has to mean "new line" in a textarea, so Ctrl/⌘+Enter submits.
+    root.querySelector('.dialog-area').addEventListener('keydown', (e) => {
+      e.stopPropagation();
+      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) finish(true);
+      else if (e.key === 'Escape') finish(null);
+    });
     document.addEventListener('keydown', (e) => {
       if (!active) return;
       if (e.key === 'Escape') { e.preventDefault(); finish(null); }
@@ -52,9 +60,9 @@
   // `ok` is true for the primary button, null for cancel/dismiss.
   function finish(ok) {
     if (!active) return;
-    const { resolve, kind } = active;
-    const input = root.querySelector('.dialog-input');
-    const value = input.value;
+    const { resolve, kind, multiline } = active;
+    const field = root.querySelector(multiline ? '.dialog-area' : '.dialog-input');
+    const value = field.value;
     active = null;
     root.style.display = 'none';
     if (kind === 'confirm') resolve(ok === true);
@@ -69,10 +77,16 @@
 
     root.querySelector('.dialog-title').textContent = o.title || (kind === 'confirm' ? 'Are you sure?' : 'Enter a value');
     root.querySelector('.dialog-message').textContent = message || '';
+    // A word list needs room to breathe (and real newlines), so prompts can
+    // ask for a textarea instead of a one-line input.
+    const multiline = kind === 'prompt' && !!o.multiline;
     const input = root.querySelector('.dialog-input');
-    input.style.display = kind === 'prompt' ? 'block' : 'none';
-    input.value = kind === 'prompt' ? (o.value || '') : '';
-    input.placeholder = o.placeholder || '';
+    const area = root.querySelector('.dialog-area');
+    input.style.display = (kind === 'prompt' && !multiline) ? 'block' : 'none';
+    area.style.display = multiline ? 'block' : 'none';
+    const field = multiline ? area : input;
+    field.value = kind === 'prompt' ? (o.value || '') : '';
+    field.placeholder = o.placeholder || '';
 
     const ok = root.querySelector('.dialog-ok');
     ok.textContent = o.confirmLabel || (kind === 'confirm' ? 'Yes' : 'OK');
@@ -81,9 +95,9 @@
 
     root.style.display = 'flex';
     return new Promise((resolve) => {
-      active = { resolve, kind };
+      active = { resolve, kind, multiline };
       setTimeout(() => {
-        if (kind === 'prompt') { input.focus(); input.select(); }
+        if (kind === 'prompt') { field.focus(); field.select(); }
         else ok.focus();
       }, 0);
     });

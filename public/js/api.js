@@ -148,7 +148,17 @@
     publicRooms: () => req('GET', '/rooms'),
     legal: (doc) => req('GET', '/legal/' + doc),
 
-    library: () => req('GET', '/library'),
+    // The library browse endpoint does the searching and filtering.
+    library: (params) => {
+      const q = new URLSearchParams();
+      for (const [k, v] of Object.entries(params || {})) {
+        if (v !== undefined && v !== null && v !== '') q.set(k, v);
+      }
+      const qs = q.toString();
+      return req('GET', '/library' + (qs ? '?' + qs : ''));
+    },
+    libraryUpdate: (id, patch) => req('PUT', '/library/' + id, patch),
+    libraryImportZip: (payload) => req('POST', '/library/import-zip', payload),
     libraryList: (id) => req('GET', '/library/' + id),
     libraryUpload: (payload) => req('POST', '/library', payload),
     libraryDelete: (id) => req('DELETE', '/library/' + id),
@@ -166,7 +176,8 @@
     importZip: (zip) => req('POST', '/lists/import-zip', { zip }),
 
     friends: () => req('GET', '/friends'),
-    friendRequest: (code) => req('POST', '/friends/request', { code }),
+    friendRequest: (who) => req('POST', '/friends/request',
+      typeof who === 'string' ? { code: who } : who),
     friendAccept: (userId) => req('POST', '/friends/accept', { userId }),
     friendDecline: (userId) => req('POST', '/friends/decline', { userId }),
     friendRemove: (userId) => req('DELETE', '/friends/' + userId),

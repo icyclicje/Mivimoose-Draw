@@ -135,6 +135,9 @@
     $('acct-name').textContent = user.username;
     paintAvatar($('acct-avatar'), user);
     $('acct-since').textContent = 'Around since ' + new Date(user.created).toLocaleDateString();
+    // Older records predate the setting; treat a missing value as "on".
+    if (!user.settings) user.settings = {};
+    if (user.settings.autosaveDrawings === undefined) user.settings.autosaveDrawings = true;
     $('acct-autosave').checked = !!user.settings.autosaveDrawings;
     $('acct-username').value = user.username;
     $('name-error').textContent = '';
@@ -447,10 +450,13 @@
   }
 
   async function addFriendByCode() {
-    const code = $('friend-add-code').value.trim();
-    if (!code) { toast('Type their friend code first.'); return; }
+    const entry = $('friend-add-code').value.trim();
+    if (!entry) { toast('Type their username first.'); return; }
     try {
-      const r = await API.friendRequest(code);
+      // Six hex characters is the old friend code; anything else is a name.
+      const r = /^[a-fA-F0-9]{6}$/.test(entry)
+        ? await API.friendRequest({ code: entry })
+        : await API.friendRequest({ username: entry });
       toast((r.accepted ? '🤝 ' : '📨 ') + r.message);
       $('friend-add-code').value = '';
       refreshFriends();

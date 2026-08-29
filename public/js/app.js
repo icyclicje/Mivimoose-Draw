@@ -54,6 +54,11 @@
   let canvasBg = '#ffffff';   // wire value for eraser events (receivers use their own paper)
   let bgStyle = '#ffffff';    // what we actually paint the paper with (colour or CanvasPattern)
   let bgKind = 'plain';
+  // Stroke smoothing: how fast the pen catches up to the cursor (1 = instant),
+  // and the smallest move worth drawing.
+  const SMOOTHING = 0.55;
+  const MIN_STEP_SQ = 0.6 * 0.6;
+  let smoothX = 0, smoothY = 0;
   let sceneId = null;         // backdrop chosen for this round (null = plain paper)
   let bgSceneId = null;       // which backdrop bgStyle was built from
 
@@ -100,11 +105,10 @@
       bgKind = null;
       return;
     }
-    const kind = opts.canvasBackground || 'plain';
-    if (kind !== bgKind || bgSceneId !== null) {
-      bgKind = kind;
+    if (bgKind !== 'plain' || bgSceneId !== null) {
+      bgKind = 'plain';
       bgSceneId = null;
-      bgStyle = makeBgStyle(kind);
+      bgStyle = makeBgStyle('plain');
     }
   }
 
@@ -217,6 +221,20 @@
   function sfx(name) { try { Audio.sfx(name); } catch (e) {} }
 
   function myName() { return ($('home-name').value || '').trim() || API.lsGet('mivi_name') || ''; }
+  // Signed in? Your account name is your name — the box follows it unless
+  // you have deliberately typed something else this session.
+  let nameTouched = false;
+  function syncNameFromAccount() {
+    const acct = window.MiviAccount;
+    const box = $('home-name');
+    if (!box || !acct || !acct.isLoggedIn()) return;
+    const username = acct.user() && acct.user().username;
+    if (!username) return;
+    if (nameTouched && box.value.trim() && box.value.trim() !== username) return;
+    box.value = username;
+    API.lsSet('mivi_name', username);
+  }
+
   function ensureName() {
     let n = myName();
     if (!n) {
@@ -357,7 +375,11 @@
       curWordSource2 = null;
       sceneId = null;
       hideOverlay('overlay-roundend');
-      phaseTotal = 20;
+      roundColor = null;
+      strokeBudget = null;
+      applyRoundColor();
+      renderModeBanner();
+      phaseTotal = state.options.pickTime || 20;
       setTimer(state.timeLeft ?? 20);
       $('overlay-choice').style.display = 'none';
       clearCanvasLocal();
@@ -411,9 +433,13 @@
       roundFirstGuesser = null;
       setCanvasLocked(false);
       renderRelayBar(null);
-      blindWord = null;
-      phaseTotal = state.options.roundTime;
+      roundColor = state.roundColor || null;
+      strokeBudget = state.strokeLimit > 0 ? { used: 0, limit: state.strokeLimit } : null;
+      applyRoundColor();
+      renderModeBanner();
+      phaseTotal = state.roundSeconds || state.options.roundTime;
       setTimer(state.timeLeft);
+      syncFinishButton();
       const amArtist = state.drawerId === myId || state.coopPartnerId === myId;
       setArtistMode(amArtist);
       updatePlayers();
@@ -486,6 +512,18 @@
         renderWordTiles(blindWord);
         setWordMetaText('you are drawing blind — follow your partner');
       }
+    });
+
+    socket.on('strokeBudget', (b) => {
+      strokeBudget = b;
+      renderModeBanner();
+      if (b.limit > 0 && b.used >= b.limit) toast('✏️ That was your last stroke.');
+    });
+
+    socket.on('poll', (poll) => {
+      const had = !!currentPoll;
+      renderPoll(poll);
+      if (poll && !had) sfx('pop');
     });
 
     socket.on('canvasLocked', ({ by }) => {
@@ -583,7 +621,11 @@
       wasArtistThisRound = isArtist;
       setCanvasLocked(false);
       renderRelayBar(null);
-      blindWord = null;
+      roundColor = null;
+      strokeBudget = null;
+      applyRoundColor();
+      renderModeBanner();
+      syncFinishButton();
       sfx('roundEnd');
       showRoundEnd(payload);
       setArtistMode(false);
@@ -829,7 +871,7 @@
       for (const r of data.rooms) {
         const row = el('div', 'room-row');
         row.appendChild(el('span', 'rr-name', r.name));
-        row.appendChild(el('span', 'rr-state' + (r.state === 'lobby' ? '' : ' playing'), r.state === 'lobby' ? 'waiting' : `round ${r.round}/${r.totalRounds}`));
+        row.appendChild(el('span', 'rr-state' + (r.state === 'lobby' ? '' : ' playing'), r.state === 'lobby' ? 'waiting' : (r.totalRounds > 0 ? `round ${r.round}/${r.totalRounds}` : `round ${r.round}`)));
         row.appendChild(el('span', 'rr-meta', `${r.players}/${r.maxPlayers}`));
         const btn = el('button', 'btn btn-small', 'Join');
         btn.disabled = r.players >= r.maxPlayers;
@@ -897,9 +939,10 @@
       renderActivityNote();
     }
     $('toggle-public').checked = !!s.public;
-    syncSpectatorUI();
     syncLobbyGifButton();
     syncAiPanel();
+    const voteList = $('btn-vote-list');
+    if (voteList) voteList.style.display = s.managed ? 'inline-block' : 'none';
     $('btn-start').style.display = isHost ? 'flex' : 'none';
     $('waiting-msg').style.display = isHost ? 'none' : 'block';
     $('waiting-msg').textContent = s.managed
@@ -941,7 +984,6 @@
       ['Mode', o.combinations ? 'Combos' : o.coopMode ? 'Co-op' : o.hidden ? 'Hidden' : 'Classic'],
       ['Spam guard', o.spamProtection ? 'On' : 'Off'],
       ['Repeats', o.avoidRepeats ? 'Avoided' : 'Allowed'],
-      ['Paper', (o.canvasBackground || 'plain').replace(/^./, c => c.toUpperCase())],
       ['Pens down', o.lockOnGuess ? 'On' : 'Off'],
     ];
     for (const [label, val] of items) {
@@ -1137,8 +1179,8 @@
     }
   }
 
-  const OPT_KEYS = ['rounds', 'roundTime', 'wordChoices', 'hintCount', 'maxPlayers', 'autocorrectStrength'];
-  const OPT_TOGGLES = ['combinations', 'lockComboParts', 'hidden', 'coopMode', 'relayMode', 'relayBlind', 'showWordSource', 'spamProtection', 'textTool', 'avoidRepeats', 'sceneBackgrounds', 'lockOnGuess', 'showPunctuation'];
+  const OPT_KEYS = ['rounds', 'roundTime', 'pickTime', 'wordChoices', 'hintCount', 'hintSpeed', 'maxPlayers', 'autocorrectStrength', 'strokeLimit'];
+  const OPT_TOGGLES = ['combinations', 'lockComboParts', 'hidden', 'coopMode', 'relayMode', 'mirrorMode', 'oneColorMode', 'suddenDeath', 'randomRoundTime', 'randomWordChoices', 'showWordSource', 'spamProtection', 'textTool', 'avoidRepeats', 'sceneBackgrounds', 'lockOnGuess', 'showPunctuation'];
 
   // Plain-language explanations shown when you tap the ? next to a setting.
   const HELP = {
@@ -1157,10 +1199,16 @@
     avoidRepeats: "Words that have already been drawn — or even shown as a choice — stay out of the rotation for this room, across games, until you change lists. Tiny lists can't get stuck: if the list runs dry, words that were only offered come back first, then ones that were drawn.",
     lockOnGuess: 'The moment the first person guesses the word, the drawing freezes — no more strokes, no erasing, no clearing. Everyone else has to work out what is already on the canvas. A big lock drops in so nobody misses it.',
     sceneBackgrounds: "Gives whoever is drawing a 🖼️ button with ready-made backdrops — a city, a beach, space, a football pitch and plenty more. Handy when the word needs a setting; picking one clears the canvas, so pick it first.",
-    canvasBackground: 'The paper everyone draws on. Grid and dot backgrounds help with proportions; the eraser puts the pattern back rather than painting over it.',
     spamProtection: 'Anyone sending more than six messages in five seconds, or the same thing three times in a row, gets muted for ten seconds. Always on in public games.',
     relayMode: 'The two co-op artists share one pen. It swaps between them every few seconds — longer rounds get longer turns — so you are always finishing someone else\'s line. Needs Co-op drawing on.',
-    relayBlind: 'The same relay, except the second artist is never told the word. They just have to read what their partner started and run with it. Needs Relay pen on.',
+    mirrorMode: 'Every mark lands flipped left-to-right. Your hand goes one way, the line goes the other. Chaos, and much funnier than it sounds.',
+    oneColorMode: 'The palette is taken away and one colour is picked for you, fresh each round. No shading your way out of it — the eraser still works.',
+    suddenDeath: 'The very first correct guess ends the round immediately. Nobody gets a leisurely second look, and the artist has to be readable fast.',
+    strokeLimit: 'How many separate strokes the artist gets for the whole round — lift the pen too often and you run out. Off means unlimited. Around 10 is a good, painful number.',
+    pickTime: 'How long the artist has to choose their word before one is picked for them.',
+    hintSpeed: 'When the letters arrive. Early front-loads them so guessers get going sooner; Late holds them back for a tougher round; Even spreads them across the clock.',
+    randomRoundTime: 'Rolls a fresh clock every round instead of using the slider — anywhere from about 40% of it up to the full number. Keeps people from pacing themselves.',
+    randomWordChoices: 'Rolls how many words the artist gets to choose from each turn, from two up to the slider.',
     showPunctuation: 'Hyphens and apostrophes show up in the blanks straight away, so "t-shirt" reads as _-_ _ _ _ _ instead of one long run. Turn it off to keep the shape of the word secret too.',
   };
 
@@ -1199,18 +1247,25 @@
     };
     dep('opt-lockComboParts', $('opt-combinations').checked);
     dep('opt-relayMode', $('opt-coopMode').checked);
-    dep('opt-relayBlind', $('opt-coopMode').checked && $('opt-relayMode').checked);
+    // Random draw time means nothing when there is no clock to randomise.
+    dep('opt-randomRoundTime', Number($('opt-roundTime').value) > 0);
+    dep('opt-randomWordChoices', Number($('opt-wordChoices').value) > 0);
   }
   const AC_LABELS = ['Off', 'Easy', 'Normal', 'Generous'];
 
   function optLabel(key, v) {
     if (key === 'roundTime') return v + 's';
     if (key === 'autocorrectStrength') return AC_LABELS[v] || v;
-    // 0 means something different for these two, so say what it means.
+    // 0 means something different for several of these, so say what it means.
     if (key === 'rounds' && Number(v) === 0) return '∞';
     if (key === 'wordChoices' && Number(v) === 0) return 'Random';
+    if (key === 'roundTime') return Number(v) === 0 ? '∞ no clock' : v + 's';
+    if (key === 'pickTime') return v + 's';
+    if (key === 'strokeLimit') return Number(v) === 0 ? 'Off' : String(v);
+    if (key === 'hintSpeed') return HINT_SPEED_LABELS[v] || v;
     return String(v);
   }
+  const HINT_SPEED_LABELS = ['Late', 'Even', 'Early'];
 
   function syncOptions(o) {
     for (const key of OPT_KEYS) {
@@ -1226,16 +1281,18 @@
       if (input) input.checked = !!o[key];
     }
     gateComboLock();
-    const paper = $('opt-canvasBackground');
-    if (paper && document.activeElement !== paper) paper.value = o.canvasBackground || 'plain';
-    // A new paper choice only shows up once the canvas is repainted.
-    if (bgKind !== (o.canvasBackground || 'plain')) syncCanvasBackground();
   }
 
   // ── Game screen widgets ──
   function updateRoundPill() {
     if (!gameState) return;
-    $('round-pill').textContent = `Round ${gameState.round || 1}/${gameState.totalRounds || 3}`;
+    const round = gameState.round || 1;
+    // rounds === 0 means unlimited. `|| 3` used to turn that into a total,
+    // which is how an unlimited game ended up announcing "Round 4/3".
+    const total = gameState.totalRounds;
+    $('round-pill').textContent = (total > 0)
+      ? `Round ${round}/${total}`
+      : `Round ${round} · ∞`;
   }
 
   function updatePlayers(opts = {}) {
@@ -1247,16 +1304,12 @@
     renderPlayerCount();
     const list = $('players-list');
     list.textContent = '';
-    // Spectators are not in the running, so they go under the players
-    // rather than being ranked among them.
-    const playing = s.players.filter(p => !p.spectator).sort((a, b) => b.score - a.score);
-    const watching = s.players.filter(p => p.spectator);
-    const sorted = playing.concat(watching);
+    const sorted = [...s.players].sort((a, b) => b.score - a.score);
     sorted.forEach((p, i) => {
       const isDrawing = p.id === s.currentDrawerId || p.id === s.coopPartnerId;
       const guessed = guessedSet.has(p.id) || p.guessed;
-      const row = el('div', 'p-row' + (isDrawing ? ' drawing' : '') + (guessed ? ' guessed' : '') + (p.connected === false ? ' dc' : '') + (p.spectator ? ' spec' : ''));
-      row.appendChild(el('span', 'rk', p.spectator ? '👁️' : '#' + (i + 1)));
+      const row = el('div', 'p-row' + (isDrawing ? ' drawing' : '') + (guessed ? ' guessed' : '') + (p.connected === false ? ' dc' : ''));
+      row.appendChild(el('span', 'rk', '#' + (i + 1)));
       row.appendChild(avatarNode(p, 'p-avatar'));
       const nm = el('span', 'nm', p.name + (p.id === myId ? ' (you)' : ''));
       nm.title = p.name;
@@ -1268,6 +1321,13 @@
       }
       if (isDrawing) row.appendChild(el('span', 'flag', '🖌️'));
       else if (guessed) row.appendChild(el('span', 'flag', '✅'));
+      // Public matches have no host, so kicking goes to a vote instead.
+      if (s.managed && p.id !== myId && s.players.length >= 3) {
+        const vk = el('button', 'votekick', '🥾');
+        vk.title = 'Start a vote to kick ' + p.name;
+        vk.onclick = (ev) => { ev.stopPropagation(); startVoteKick(p.id, p.name); };
+        row.appendChild(vk);
+      }
       // ＋ = send a friend request (both of you need accounts).
       const acct = window.MiviAccount;
       if (p.id !== myId && p.accountId && acct.isLoggedIn() && !acct.friendIds().has(p.accountId) && p.accountId !== acct.user().id) {
@@ -1276,8 +1336,7 @@
         add.onclick = (ev) => { ev.stopPropagation(); socket.emit('friendRequest', { playerId: p.id }); };
         row.appendChild(add);
       }
-      if (p.spectator) row.appendChild(el('span', 'spec-badge', 'WATCHING'));
-      else row.appendChild(el('span', 'sc', p.score + ' pts'));
+      row.appendChild(el('span', 'sc', p.score + ' pts'));
       if (opts.bumpId === p.id) row.appendChild(el('span', 'bump', '+' + opts.bumpPts));
       list.appendChild(row);
     });
@@ -1306,6 +1365,14 @@
   const RING_C = 2 * Math.PI * 19;
   function setTimer(t) {
     currentTimeLeft = t;
+    // No clock at all: show it rather than a frozen zero.
+    if (gameState && gameState.roundSeconds === 0 && gameState.state === 'drawing') {
+      $('timer-num').textContent = '∞';
+      const ring = $('timer-ring-fg');
+      if (ring) ring.style.strokeDashoffset = '0';
+      $('timer-wrap').classList.remove('urgent');
+      return;
+    }
     $('timer-num').textContent = t;
     const frac = phaseTotal > 0 ? Math.max(0, Math.min(1, t / phaseTotal)) : 0;
     $('timer-ring-fg').style.strokeDashoffset = String(RING_C * (1 - frac));
@@ -1501,6 +1568,7 @@
     const text = input.value.trim();
     if (!text) return;
     input.value = '';
+    rememberSent('game', text);
     if (gameState?.state === 'drawing' && !isArtist && !hasGuessed) {
       socket.emit('guess', { text });
     } else {
@@ -1513,6 +1581,7 @@
     const text = input.value.trim();
     if (!text) return;
     input.value = '';
+    rememberSent('lobby', text);
     socket.emit('chat', { text });
   }
 
@@ -1634,12 +1703,56 @@
     setTimeout(() => $('emoji-search').focus(), 0);
   }
 
-  function stampEmoji(p) {
-    if (!pendingEmoji) { openEmojiPicker(); return; }
-    const data = {
-      type: 'text', x: p.x, y: p.y, text: pendingEmoji,
-      color: currentColor, size: Math.max(brushSize, 8),
-    };
+  // Emoji are placed by pressing where you want them and dragging outwards
+  // to choose how big — release to stamp. A plain tap uses the brush size.
+  let emojiDrag = null;
+  const EMOJI_MIN = 12, EMOJI_MAX = 320;
+
+  function emojiSizeFor(dist) {
+    if (dist < 4) return Math.max(EMOJI_MIN, brushSize * 4);
+    return Math.max(EMOJI_MIN, Math.min(EMOJI_MAX, Math.round(dist * 2)));
+  }
+
+  function beginEmojiDrag(p) {
+    if (!pendingEmoji) { openEmojiPicker(); return false; }
+    emojiDrag = { x: p.x, y: p.y, size: emojiSizeFor(0) };
+    drawEmojiPreview();
+    return true;
+  }
+
+  function updateEmojiDrag(p) {
+    if (!emojiDrag) return;
+    const dx = p.x - emojiDrag.x, dy = p.y - emojiDrag.y;
+    emojiDrag.size = emojiSizeFor(Math.sqrt(dx * dx + dy * dy));
+    drawEmojiPreview();
+  }
+
+  function drawEmojiPreview() {
+    if (!emojiDrag || !pctx) return;
+    pctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
+    pctx.save();
+    pctx.globalAlpha = 0.75;
+    pctx.font = emojiDrag.size + 'px system-ui, "Segoe UI Emoji", "Apple Color Emoji", sans-serif';
+    pctx.textAlign = 'center';
+    pctx.textBaseline = 'middle';
+    pctx.fillText(pendingEmoji, emojiDrag.x, emojiDrag.y);
+    // A faint ring showing the size you are dialling in.
+    pctx.globalAlpha = 0.35;
+    pctx.strokeStyle = '#6C5CE7';
+    pctx.lineWidth = 1.5;
+    pctx.setLineDash([5, 4]);
+    pctx.beginPath();
+    pctx.arc(emojiDrag.x, emojiDrag.y, emojiDrag.size / 2, 0, Math.PI * 2);
+    pctx.stroke();
+    pctx.restore();
+  }
+
+  function endEmojiDrag() {
+    if (!emojiDrag) return;
+    const { x, y, size } = emojiDrag;
+    emojiDrag = null;
+    if (pctx) pctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
+    const data = { type: 'emoji', x, y, text: pendingEmoji, size };
     applyDraw(data);
     flushBatch();
     socket.emit('draw', data);
@@ -1707,7 +1820,7 @@
     const p = pos(e);
 
     if (currentTool === 'emoji') {
-      stampEmoji(p);
+      if (beginEmojiDrag(p)) drawing = true;
       return;
     }
     if (currentTool === 'text') {
@@ -1730,6 +1843,7 @@
     }
     lastX = p.x; lastY = p.y;
     midX = p.x; midY = p.y;
+    smoothX = p.x; smoothY = p.y;
     const erasing = currentTool === 'eraser';
     const paint = erasing ? bgStyle : currentColor;
     const size = erasing ? brushSize * 2 : brushSize;
@@ -1742,6 +1856,7 @@
 
   function draw(e) {
     if (!drawing || !isArtist) return;
+    if (emojiDrag) { updateEmojiDrag(pos(e)); return; }
     if (shape) {
       const p = pos(e);
       drawShapePreview(shape.x1, shape.y1, p.x, p.y);
@@ -1756,8 +1871,15 @@
     const evs = (e.getCoalescedEvents && e.getCoalescedEvents()) || [];
     const list = evs.length ? evs : [e];
     for (const ce of list) {
-      const p = pos(ce);
-      if (p.x === lastX && p.y === lastY) continue;
+      const raw = pos(ce);
+      // A light low-pass on the pointer takes the tremble out of a slow hand
+      // without adding any lag you can feel. Fast strokes barely notice it.
+      smoothX += (raw.x - smoothX) * SMOOTHING;
+      smoothY += (raw.y - smoothY) * SMOOTHING;
+      const p = { x: smoothX, y: smoothY };
+      // Sub-pixel wobble is not worth a packet, or a curve.
+      const dx = p.x - lastX, dy = p.y - lastY;
+      if (dx * dx + dy * dy < MIN_STEP_SQ) continue;
       const mx = (lastX + p.x) / 2;
       const my = (lastY + p.y) / 2;
       const ev = { type: 'quad', x1: midX, y1: midY, cx: lastX, cy: lastY, x2: mx, y2: my, color: wireColor, size, tool: currentTool };
@@ -1771,6 +1893,7 @@
   function endDraw(e) {
     if (!drawing) return;
     drawing = false;
+    if (emojiDrag) { endEmojiDrag(); return; }
     if (shape) {
       const p = pos(e);
       pctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
@@ -1861,6 +1984,12 @@
       ctx.lineCap = 'round';
       ctx.lineJoin = 'round';
       ctx.stroke();
+    } else if (d.type === 'emoji') {
+      ctx.font = Math.round(d.size || 48) + 'px system-ui, "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(String(d.text || '').slice(0, 8), d.x, d.y);
+      ctx.textAlign = 'left';
     } else if (d.type === 'text') {
       ctx.font = `800 ${Math.round((d.size || 6) * 3 + 14)}px 'Plus Jakarta Sans', system-ui, sans-serif`;
       ctx.textBaseline = 'middle';
@@ -2325,6 +2454,15 @@
     });
   }
 
+  function blobToDataUrl(blob) {
+    return new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => resolve(String(r.result || ''));
+      r.onerror = () => reject(new Error('Could not read the GIF.'));
+      r.readAsDataURL(blob);
+    });
+  }
+
   function loadImage(src) {
     return new Promise((resolve, reject) => {
       const img = new Image();
@@ -2500,6 +2638,24 @@
       a.download = 'mivimoose-game.gif';
       a.click();
       setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+      // Signed in? Keep a copy in the gallery as well as on disk.
+      if (window.MiviAccount.isLoggedIn()) {
+        say('Saving to your gallery…');
+        try {
+          const dataUrl = await blobToDataUrl(blob);
+          await API.saveDrawing({
+            dataUrl,
+            word: 'Game recap · ' + gameFrames.length + ' rounds',
+            artist: window.MiviAccount.user().username,
+            guessedCount: 0,
+            playerCount: (gameState && gameState.players.length) || 0,
+            likes: 0,
+          });
+          toast('🎬 Saved to your gallery too');
+        } catch (e) {
+          toast('Saved the file — the gallery copy failed: ' + e.message);
+        }
+      }
       say('Saved!');
       if (inOverlay) fill.style.width = '100%';
       sfx('save');
@@ -2698,8 +2854,7 @@
       state = 'Picking a word';
     } else if (s.state === 'drawing') {
       details = `Round ${s.round}/${s.totalRounds}`;
-      if (amSpectator()) state = 'Watching';
-      else if (isArtist && relayHolderId) state = relayHolderId === myId ? 'Drawing (relay)' : 'Waiting for the pen';
+      if (isArtist && relayHolderId) state = relayHolderId === myId ? 'Drawing (relay)' : 'Waiting for the pen';
       else state = isArtist ? 'Drawing' : 'Guessing';
     } else if (s.state === 'roundEnd') {
       details = `Round ${s.round}/${s.totalRounds}`;
@@ -3105,12 +3260,6 @@
     } catch (e) { /* not a moderator, or offline — stays hidden */ }
   }
 
-  // ══════════ Spectators ══════════
-  function amSpectator() {
-    const me = gameState && gameState.players.find(p => p.id === myId);
-    return !!(me && me.spectator);
-  }
-
   // Offer last game's GIF in the lobby, so ending a game early (or just
   // missing the countdown) does not throw the drawings away.
   function syncLobbyGifButton() {
@@ -3121,17 +3270,239 @@
     if (can) btn.textContent = `🎬 Save last game's ${gameFrames.length} drawing${gameFrames.length === 1 ? '' : 's'} as a GIF`;
   }
 
-  function syncSpectatorUI() {
-    const row = $('spectate-toggle-row');
-    const box = $('toggle-spectate');
-    if (!row || !box) return;
+
+
+  // ══════════ Back button closes what's open ══════════
+  // On a phone, Back is the natural "get me out of this" gesture. Rather
+  // than leaving the game, it dismisses the topmost thing on screen.
+  let overlayDepth = 0;
+
+  function pushOverlayState() {
+    overlayDepth++;
+    try { history.pushState({ mivi: overlayDepth }, ''); } catch (e) {}
+  }
+
+  // In closing order — the most recently opened kind of thing goes first.
+  function closeTopOverlay() {
+    if (textInput) { closeTextInput(); return true; }
+    if (typeof emojiDrag !== 'undefined' && emojiDrag) {
+      emojiDrag = null;
+      if (pctx) pctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
+      return true;
+    }
+    const picker = $('emoji-picker');
+    if (picker && picker.style.display !== 'none' && picker.style.display) { picker.style.display = 'none'; return true; }
+    const openModal = [...document.querySelectorAll('.modal-backdrop')]
+      .reverse()
+      .find(m => m.style.display === 'flex' || (m.style.display && m.style.display !== 'none'));
+    if (openModal) { openModal.style.display = 'none'; return true; }
+    return false;
+  }
+
+  function wireBackButton() {
+    // Seed one state so the first Back has something to pop.
+    try { history.replaceState({ mivi: 0 }, ''); } catch (e) {}
+    window.addEventListener('popstate', () => {
+      if (closeTopOverlay()) {
+        // Keep a state in the stack so the next Back also lands here.
+        pushOverlayState();
+      }
+    });
+    // Anything that opens over the page registers a state to pop.
+    document.addEventListener('click', (e) => {
+      const opener = e.target.closest('[data-opens-overlay]');
+      if (opener) pushOverlayState();
+    }, true);
+  }
+
+  // ══════════ Click an empty patch to start typing ══════════
+  // Anywhere that isn't a control, in a room, puts the caret in the chat box.
+  function wireClickToType() {
+    document.addEventListener('mousedown', (e) => {
+      if (!roomCode) return;
+      const t = e.target;
+      if (t.closest('input, textarea, button, select, a, label, .modal-backdrop, canvas, .swatch, [contenteditable]')) return;
+      // Never steal a real text selection.
+      const sel = window.getSelection();
+      if (sel && String(sel).length > 0) return;
+      const box = $('screen-game').classList.contains('active') ? $('game-chat-input') : $('lobby-chat-input');
+      if (box && box.offsetParent !== null && document.activeElement !== box) box.focus();
+    });
+  }
+
+  // ══════════ Drag a list onto the room ══════════
+  // Dropping .txt or .zip files on the word-list panel adds them, so nobody
+  // has to hunt for the right button.
+  function wireListDrop() {
+    const zone = $('words-panel');
+    if (!zone) return;
+    const stop = (e) => { e.preventDefault(); e.stopPropagation(); };
+
+    ['dragenter', 'dragover'].forEach(ev => zone.addEventListener(ev, (e) => {
+      if (!canEditRoomLists()) return;
+      stop(e);
+      e.dataTransfer.dropEffect = 'copy';
+      zone.classList.add('drop-target');
+    }));
+    ['dragleave', 'dragend'].forEach(ev => zone.addEventListener(ev, (e) => {
+      if (e.target !== zone && zone.contains(e.relatedTarget)) return;
+      zone.classList.remove('drop-target');
+    }));
+
+    zone.addEventListener('drop', async (e) => {
+      if (!canEditRoomLists()) return;
+      stop(e);
+      zone.classList.remove('drop-target');
+      const files = Array.from((e.dataTransfer && e.dataTransfer.files) || []);
+      if (!files.length) return;
+      let added = 0;
+      for (const file of files) {
+        const lower = file.name.toLowerCase();
+        if (lower.endsWith('.zip')) {
+          if (!window.MiviAccount.isLoggedIn()) { toast('📚 Sign in to import a zip.'); continue; }
+          try {
+            const res = await API.importZip(await fileToBase64(file));
+            for (const l of res.lists) socket.emit('attachAccountList', { listId: l.id });
+            added += res.lists.length;
+            renderMyLists();
+          } catch (err) { toast('❌ ' + err.message); }
+        } else if (lower.endsWith('.txt')) {
+          const text = await file.text();
+          if (!text.trim()) { toast(`"${file.name}" is empty — skipped.`); continue; }
+          socket.emit('addCustomList', { name: file.name.replace(/\.txt$/i, ''), text });
+          added++;
+        } else {
+          toast(`${file.name} isn't a .txt or .zip — skipped.`);
+        }
+      }
+      if (added) sfx('save');
+    });
+  }
+
+  function canEditRoomLists() {
     const s = gameState;
-    const isHost = !!(s && s.host === myId && !s.managed);
-    // The host cannot sit out — someone has to run the room.
-    row.style.display = (s && !isHost) ? 'flex' : 'none';
-    if (document.activeElement !== box) box.checked = amSpectator();
-    const banner = $('spectating-banner');
-    if (banner) banner.style.display = amSpectator() ? 'flex' : 'none';
+    return !!(s && !s.managed && s.host === myId);
+  }
+
+  // ══════════ Public-match voting ══════════
+  let currentPoll = null;
+
+  function renderPoll(poll) {
+    currentPoll = poll;
+    const card = $('poll-card');
+    if (!card) return;
+    if (!poll) { card.style.display = 'none'; return; }
+    card.style.display = 'block';
+    $('poll-icon').textContent = poll.kind === 'kick' ? '🥾' : '📋';
+    $('poll-q').textContent = poll.proposerName + ' wants to ' + poll.question;
+    const detail = $('poll-detail');
+    detail.textContent = poll.detail || '';
+    detail.style.display = poll.detail ? 'block' : 'none';
+    $('poll-clock').textContent = poll.endsIn + 's';
+    const pct = poll.needed > 0 ? Math.min(100, (poll.yes / poll.needed) * 100) : 0;
+    $('poll-bar-fill').style.width = pct + '%';
+    $('poll-tally').textContent = `${poll.yes} of ${poll.needed} needed · ${poll.no} against`;
+    // You do not get a vote on your own removal.
+    $('poll-actions').style.display = poll.targetKey === myId ? 'none' : 'flex';
+  }
+
+  function startVoteKick(playerId, name) {
+    MiviDialog.confirm(`Start a vote to kick ${name}?`, { confirmLabel: 'Start vote' }).then(ok => {
+      if (ok) socket.emit('startPoll', { kind: 'kick', playerId });
+    });
+  }
+
+  async function startVoteAddList() {
+    const name = await MiviDialog.prompt('What should the list be called?', { placeholder: 'e.g. Cursed objects' });
+    if (!name) return;
+    const text = await MiviDialog.prompt('Paste the words — one per line, or commas between them.', { multiline: true, placeholder: 'apple\nbanana\ncherry' });
+    if (!text) return;
+    socket.emit('startPoll', { kind: 'addList', name, text });
+  }
+
+  // ══════════ The round's modes, on screen ══════════
+  let strokeBudget = null;   // { used, limit } while a stroke limit is on
+
+  function renderModeBanner() {
+    const box = $('mode-banner');
+    if (!box) return;
+    const s = gameState;
+    const bits = [];
+    if (s && s.state === 'drawing') {
+      if (s.options.mirrorMode) bits.push('🪞 Mirrored');
+      if (s.options.oneColorMode && roundColor) bits.push('🎨 One colour');
+      if (s.options.suddenDeath) bits.push('⚡ Sudden death');
+      if (strokeBudget && strokeBudget.limit > 0) {
+        const left = Math.max(0, strokeBudget.limit - strokeBudget.used);
+        bits.push(`✏️ ${left} stroke${left === 1 ? '' : 's'} left`);
+      }
+    }
+    box.textContent = bits.join('  ·  ');
+    box.style.display = bits.length ? 'block' : 'none';
+    box.classList.toggle('spent', !!(strokeBudget && strokeBudget.limit > 0 && strokeBudget.used >= strokeBudget.limit));
+  }
+
+  // One Colour hands the artist a single shade and takes the palette away.
+  let roundColor = null;
+  function applyRoundColor() {
+    const box = $('palette');
+    if (!box) return;
+    const locked = !!roundColor;
+    box.classList.toggle('one-color', locked);
+    box.querySelectorAll('.swatch').forEach(sw => { sw.disabled = locked; });
+    if (locked) {
+      currentColor = roundColor;
+      box.style.setProperty('--locked-color', roundColor);
+      // The one swatch that still means anything is the round's own colour.
+      box.querySelectorAll('.swatch').forEach(sw => sw.classList.remove('active'));
+    }
+  }
+
+  // ══════════ Untimed rounds ══════════
+  function syncFinishButton() {
+    const btn = $('btn-finish-drawing');
+    if (!btn) return;
+    const s = gameState;
+    const untimed = !!(s && s.roundSeconds === 0);
+    btn.style.display = (untimed && isArtist && s.state === 'drawing' && !canvasLocked && !relayBlocksMe())
+      ? 'block' : 'none';
+  }
+
+  // ══════════ Chat history (↑ recalls what you last said) ══════════
+  const chatHistory = { game: [], lobby: [] };
+  let chatCursor = { game: -1, lobby: -1 };
+
+  function rememberSent(which, text) {
+    const h = chatHistory[which];
+    if (!text || h[h.length - 1] === text) { chatCursor[which] = -1; return; }
+    h.push(text);
+    if (h.length > 50) h.shift();
+    chatCursor[which] = -1;
+  }
+
+  // ↑ walks back through what you sent, ↓ walks forward again.
+  function wireChatHistory(input, which) {
+    input.addEventListener('keydown', (e) => {
+      if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+      const h = chatHistory[which];
+      if (!h.length) return;
+      // Only hijack the arrows when the caret has nowhere else to go.
+      if (e.key === 'ArrowUp' && input.selectionStart !== 0 && input.value) return;
+      e.preventDefault();
+      if (e.key === 'ArrowUp') {
+        chatCursor[which] = chatCursor[which] < 0 ? h.length - 1 : Math.max(0, chatCursor[which] - 1);
+      } else {
+        if (chatCursor[which] < 0) return;
+        chatCursor[which]++;
+        if (chatCursor[which] >= h.length) {   // past the newest — back to a blank line
+          chatCursor[which] = -1;
+          input.value = '';
+          return;
+        }
+      }
+      input.value = h[chatCursor[which]];
+      requestAnimationFrame(() => { input.selectionStart = input.selectionEnd = input.value.length; });
+    });
   }
 
   // ══════════ Relay pen ══════════
@@ -3175,111 +3546,319 @@
     document.querySelectorAll('#modal-library .tab').forEach(t => t.classList.toggle('active', t.dataset.libtab === name));
     document.querySelectorAll('#modal-library .tab-pane').forEach(p => p.classList.toggle('active', p.id === 'libtab-' + name));
     if (name === 'upload') syncLibraryUploadForm();
+    if (name === 'mine') refreshMyLibraryLists();
+    if (name === 'browse') refreshLibrary();
   }
 
   function openLibrary() {
     $('modal-library').style.display = 'flex';
     showLibTab('browse');
     refreshLibrary();
+    setTimeout(() => { const q = $('lib-q'); if (q) q.focus(); }, 60);
   }
 
+  let uploadTags = [];
+
   function syncLibraryUploadForm() {
+    renderTagPicker($('lib-tagpick'), uploadTags);
     const acct = window.MiviAccount;
     const needLogin = !acct.isLoggedIn(); // sharing always needs an account
     $('lib-upload-form').style.display = needLogin ? 'none' : 'flex';
     $('lib-need-login').style.display = needLogin ? 'flex' : 'none';
-    $('lib-author').style.display = 'none';
   }
 
-  async function refreshLibrary() {
-    const rows = $('lib-rows');
-    rows.textContent = '';
-    let lists = [];
-    try { lists = (await API.library()).lists; } catch (e) { toast('❌ ' + e.message); }
-    $('lib-empty').style.display = lists.length ? 'none' : 'block';
-    for (const l of lists) {
-      const row = el('div', 'list-row');
-      row.appendChild(el('span', 'ln', l.name));
-      row.appendChild(el('span', 'lc', `${l.count} words · by ${l.author} · ${l.downloads} downloads`));
-      const dl = el('button', null, '⬇️');
-      dl.title = 'Download as .txt';
-      dl.onclick = () => {
-        const a = document.createElement('a');
-        a.href = API.libraryDownloadUrl(l.id);
-        a.download = '';
-        a.click();
+  // ══════════ The list library ══════════
+  // A browser with search, filters and detail cards. The server does the
+  // matching so the whole library never has to come down the wire.
+  const LIB_PAGE = 30;
+  let libState = { q: '', sort: 'popular', tag: '', difficulty: '', author: '', minWords: '', maxWords: '', offset: 0 };
+  let libTags = [];
+  let libSelected = null;      // the list open in the detail modal
+
+  function libQuery(extra) {
+    return Object.assign({
+      q: libState.q,
+      sort: libState.sort,
+      tag: libState.tag,
+      difficulty: libState.difficulty,
+      author: libState.author,
+      minWords: libState.minWords,
+      maxWords: libState.maxWords,
+      limit: LIB_PAGE,
+      offset: libState.offset,
+    }, extra || {});
+  }
+
+  const DIFF_BADGE = { easy: ['Easy', 'good'], medium: ['Medium', 'warn'], hard: ['Hard', 'bad'] };
+
+  function libCard(l, opts = {}) {
+    const card = el('div', 'lib-card');
+
+    const head = el('div', 'lib-card-head');
+    const name = el('div', 'lib-card-name', l.name);
+    name.title = l.name;
+    head.appendChild(name);
+    const diff = DIFF_BADGE[l.difficulty];
+    if (diff) head.appendChild(el('span', 'lib-badge ' + diff[1], diff[0]));
+    card.appendChild(head);
+
+    card.appendChild(el('div', 'lib-card-by', `${l.count} words · by ${l.author}`));
+
+    if (l.description) {
+      const d = el('div', 'lib-card-desc', l.description);
+      card.appendChild(d);
+    } else {
+      card.appendChild(el('div', 'lib-card-desc muted', 'No description yet.'));
+    }
+
+    if (l.preview && l.preview.length) {
+      card.appendChild(el('div', 'lib-card-preview', l.preview.slice(0, 6).join(' · ')));
+    }
+
+    if (l.tags && l.tags.length) {
+      const tags = el('div', 'lib-card-tags');
+      for (const t of l.tags) {
+        const chip = el('button', 'lib-tag', t);
+        chip.onclick = () => { libState.tag = t; libState.offset = 0; syncTagBar(); refreshLibrary(); };
+        tags.appendChild(chip);
+      }
+      card.appendChild(tags);
+    }
+
+    const foot = el('div', 'lib-card-foot');
+    foot.appendChild(el('span', 'lib-dl', '⬇️ ' + l.downloads));
+
+    const info = el('button', 'lib-act', 'ℹ️');
+    info.title = 'What is in this list?';
+    info.onclick = () => openListInfo(l.id);
+    foot.appendChild(info);
+
+    const dl = el('button', 'lib-act', '💾');
+    dl.title = 'Download as .txt';
+    dl.onclick = () => {
+      const a = document.createElement('a');
+      a.href = API.libraryDownloadUrl(l.id);
+      a.download = '';
+      a.click();
+    };
+    foot.appendChild(dl);
+
+    if (window.MiviApp && window.MiviApp.canAddRoomList && window.MiviApp.canAddRoomList()) {
+      const use = el('button', 'lib-act primary', '🎮');
+      use.title = 'Use in my room';
+      use.onclick = () => useListInRoom(l.id);
+      foot.appendChild(use);
+    }
+
+    if (l.mine || opts.mine) {
+      const edit = el('button', 'lib-act', '✏️');
+      edit.title = 'Edit this list';
+      edit.onclick = () => openListInfo(l.id, { edit: true });
+      foot.appendChild(edit);
+    }
+
+    if (l.canModerate && !l.mine) {
+      const take = el('button', 'lib-act danger', '🚫');
+      take.title = 'Moderator: take it down';
+      take.onclick = () => moderateList(l);
+      foot.appendChild(take);
+    }
+
+    card.appendChild(foot);
+    return card;
+  }
+
+  async function useListInRoom(id) {
+    try {
+      const d = await API.libraryList(id);
+      window.MiviApp.addRoomList(d.list.name, d.list.words.join('\n'));
+      $('modal-library').style.display = 'none';
+      $('modal-listinfo').style.display = 'none';
+      toast(`🎮 "${d.list.name}" is in your room's lists now`);
+    } catch (e) { toast('❌ ' + e.message); }
+  }
+
+  async function moderateList(l) {
+    if (!await MiviDialog.confirm(`Take "${l.name}" down? It disappears for everyone.`, { confirmLabel: 'Take it down', danger: true })) return;
+    try { await API.libraryDelete(l.id); toast('🗑️ Taken down'); refreshLibrary(); }
+    catch (e) { toast('❌ ' + e.message); }
+  }
+
+  function syncTagBar() {
+    const bar = $('lib-tagbar');
+    if (!bar) return;
+    bar.textContent = '';
+    const all = el('button', 'lib-tag' + (libState.tag ? '' : ' on'), 'All');
+    all.onclick = () => { libState.tag = ''; libState.offset = 0; syncTagBar(); refreshLibrary(); };
+    bar.appendChild(all);
+    for (const f of libTags) {
+      const chip = el('button', 'lib-tag' + (libState.tag === f.tag ? ' on' : ''), `${f.tag} ${f.count}`);
+      chip.onclick = () => {
+        libState.tag = libState.tag === f.tag ? '' : f.tag;
+        libState.offset = 0;
+        syncTagBar();
+        refreshLibrary();
       };
-      row.appendChild(dl);
-      if (window.MiviAccount.isLoggedIn()) {
-        const save = el('button', null, '💾');
-        save.title = 'Save to my lists';
-        save.onclick = async () => {
-          try {
-            const d = await API.libraryList(l.id);
-            await API.createList(d.list.name, d.list.words);
-            toast(`💾 "${d.list.name}" is in your lists now`);
-            window.MiviAccount.refreshLists();
-          } catch (e) { toast('❌ ' + e.message); }
-        };
-        row.appendChild(save);
+      bar.appendChild(chip);
+    }
+  }
+
+  let libSeq = 0;
+  async function refreshLibrary(append) {
+    const rows = $('lib-rows');
+    const seq = ++libSeq;
+    if (!append) { rows.textContent = ''; libState.offset = 0; }
+    let data;
+    try {
+      data = await API.library(libQuery());
+    } catch (e) {
+      toast('❌ ' + e.message);
+      return;
+    }
+    if (seq !== libSeq) return;              // a newer search overtook this one
+
+    if (!append) rows.textContent = '';
+    for (const l of data.lists) rows.appendChild(libCard(l));
+
+    libTags = data.facets ? data.facets.tags : [];
+    syncTagBar();
+
+    const authors = $('lib-authors');
+    if (authors && data.facets) {
+      authors.textContent = '';
+      for (const a of data.facets.authors) {
+        const o = document.createElement('option');
+        o.value = a;
+        authors.appendChild(o);
       }
-      if (window.MiviApp && window.MiviApp.canAddRoomList && window.MiviApp.canAddRoomList()) {
-        const use = el('button', null, '🎮');
-        use.title = 'Use in my room';
-        use.onclick = async () => {
-          try {
-            const d = await API.libraryList(l.id);
-            window.MiviApp.addRoomList(d.list.name, d.list.words.join('\n'));
-            $('modal-library').style.display = 'none';
-            toast(`🎮 "${d.list.name}" is in your room's lists now`);
-          } catch (e) { toast('❌ ' + e.message); }
-        };
-        row.appendChild(use);
-      }
-      if (l.canModerate && !l.mine) {
-        const take = el('button', null, '🗑️');
-        take.title = 'Take this list down (moderator)';
-        take.onclick = async () => {
-          if (!await MiviDialog.confirm(`Take "${l.name}" down? It disappears for everyone.`, { confirmLabel: 'Take it down', danger: true })) return;
-          try { await API.libraryDelete(l.id); toast('🗑️ Taken down'); refreshLibrary(); }
-          catch (e) { toast('❌ ' + e.message); }
-        };
-        row.appendChild(take);
-        if (l.ownerId) {
-          const ban = el('button', null, '🚫');
-          ban.title = 'Stop ' + l.author + ' sharing lists';
-          ban.onclick = async () => {
-            const reason = await MiviDialog.prompt('Why is ' + l.author + ' being banned from sharing?', { title: 'Ban from sharing', placeholder: 'Reason (optional)', confirmLabel: 'Ban' });
-            if (reason === null) return;
-            try {
-              const res = await API.modBan(l.ownerId, reason);
-              toast(`🚫 ${l.author} banned — ${res.removedLists} list${res.removedLists === 1 ? '' : 's'} removed`);
-              refreshLibrary();
-              window.MiviAccount.refreshModPanel();
-            } catch (e) { toast('❌ ' + e.message); }
-          };
-          row.appendChild(ban);
-        }
-      }
-      if (l.mine) {
-        const ren = el('button', null, '✏️');
-        ren.title = 'Rename this list';
-        ren.onclick = async () => {
-          const name = await MiviDialog.prompt('New name for this list:', { title: 'Rename list', value: l.name, confirmLabel: 'Rename' });
-          if (name === null) return;
-          try { await API.libraryRename(l.id, name.trim()); toast('✏️ Renamed'); refreshLibrary(); }
-          catch (e) { toast('❌ ' + e.message); }
-        };
-        row.appendChild(ren);
-        const del = el('button', null, '🗑️');
-        del.title = 'Take it down';
-        del.onclick = async () => {
-          if (!await MiviDialog.confirm(`Take "${l.name}" out of the library?`, { confirmLabel: 'Remove', danger: true })) return;
-          try { await API.libraryDelete(l.id); refreshLibrary(); } catch (e) { toast('❌ ' + e.message); }
-        };
-        row.appendChild(del);
-      }
-      rows.appendChild(row);
+    }
+
+    const shown = rows.children.length;
+    $('lib-empty').style.display = shown ? 'none' : 'block';
+    $('btn-lib-more').style.display = shown < data.total ? 'block' : 'none';
+    $('lib-count-note').textContent = data.total
+      ? `${shown} of ${data.total} list${data.total === 1 ? '' : 's'}` + (data.total < data.libraryTotal ? ` (${data.libraryTotal} in all)` : '')
+      : '';
+  }
+
+  async function refreshMyLibraryLists() {
+    const rows = $('lib-mine-rows');
+    if (!rows) return;
+    rows.textContent = '';
+    if (!window.MiviAccount.isLoggedIn()) {
+      $('lib-mine-empty').style.display = 'block';
+      $('lib-mine-empty').textContent = 'Sign in to see the lists you have shared.';
+      return;
+    }
+    let data;
+    try { data = await API.library({ mine: 1, limit: 200, sort: 'newest' }); }
+    catch (e) { toast('❌ ' + e.message); return; }
+    for (const l of data.lists) rows.appendChild(libCard(l, { mine: true }));
+    $('lib-mine-empty').style.display = data.lists.length ? 'none' : 'block';
+  }
+
+  // ── One list, up close ──
+  function renderTagPicker(box, selected, onChange) {
+    box.textContent = '';
+    const all = libTags.length ? libTags.map(f => f.tag) : LIB_ALL_TAGS;
+    for (const t of LIB_ALL_TAGS) {
+      const chip = el('button', 'lib-tag' + (selected.includes(t) ? ' on' : ''), t);
+      chip.onclick = () => {
+        const i = selected.indexOf(t);
+        if (i >= 0) selected.splice(i, 1);
+        else if (selected.length < 4) selected.push(t);
+        else { toast('Four tags is the limit.'); return; }
+        renderTagPicker(box, selected, onChange);
+        if (onChange) onChange(selected);
+      };
+      box.appendChild(chip);
+    }
+  }
+
+  const LIB_ALL_TAGS = [
+    'general', 'animals', 'food', 'objects', 'places', 'people',
+    'nature', 'science', 'sport', 'music', 'film-tv', 'games',
+    'anime', 'memes', 'hard', 'easy', 'kids', 'other',
+  ];
+
+  async function openListInfo(id, opts = {}) {
+    let list;
+    try { list = (await API.libraryList(id)).list; }
+    catch (e) { toast('❌ ' + e.message); return; }
+    libSelected = list;
+
+    $('li-title').textContent = list.name;
+    $('li-byline').textContent = `by ${list.author} · shared ${new Date(list.created).toLocaleDateString()}`;
+
+    const badges = $('li-badges');
+    badges.textContent = '';
+    const diff = DIFF_BADGE[list.difficulty];
+    if (diff) badges.appendChild(el('span', 'lib-badge ' + diff[1], diff[0]));
+    for (const t of (list.tags || [])) badges.appendChild(el('span', 'lib-badge', t));
+
+    $('li-desc').textContent = list.description || 'The author has not written a description for this one.';
+    $('li-desc').classList.toggle('muted', !list.description);
+
+    $('li-stats').textContent = `${list.count} words · ${list.downloads} download${list.downloads === 1 ? '' : 's'}`;
+
+    // A generous sample, not the whole thing — the point is to judge it.
+    const words = $('li-words');
+    words.textContent = '';
+    for (const w of list.words.slice(0, 120)) words.appendChild(el('span', 'li-word', w));
+    if (list.words.length > 120) words.appendChild(el('span', 'li-word muted', `+${list.words.length - 120} more`));
+
+    const canUse = !!(window.MiviApp && window.MiviApp.canAddRoomList && window.MiviApp.canAddRoomList());
+    $('btn-li-use').style.display = canUse ? 'inline-block' : 'none';
+    $('btn-li-edit').style.display = list.mine ? 'inline-block' : 'none';
+    $('btn-li-delete').style.display = list.mine ? 'inline-block' : 'none';
+    $('li-edit').style.display = 'none';
+    $('li-edit-error').textContent = '';
+
+    $('modal-listinfo').style.display = 'flex';
+    if (opts.edit && list.mine) startListEdit();
+  }
+
+  let editTags = [];
+  function startListEdit() {
+    const l = libSelected;
+    if (!l) return;
+    editTags = [...(l.tags || [])];
+    $('li-edit-name').value = l.name;
+    $('li-edit-desc').value = l.description || '';
+    $('li-edit-words').value = l.words.join('\n');
+    renderTagPicker($('li-edit-tags'), editTags);
+    updateEditCount();
+    $('li-edit').style.display = 'block';
+    $('li-edit-name').focus();
+  }
+
+  function updateEditCount() {
+    const n = $('li-edit-words').value.split(/[\n,]+/).map(w => w.trim()).filter(Boolean).length;
+    $('li-edit-count').textContent = n + (n === 1 ? ' word' : ' words');
+  }
+
+  async function saveListEdit() {
+    const l = libSelected;
+    if (!l) return;
+    const words = $('li-edit-words').value.split(/[\n,]+/).map(w => w.trim()).filter(Boolean);
+    if (!words.length) { $('li-edit-error').textContent = 'A list needs at least one word.'; return; }
+    const btn = $('btn-li-save');
+    btn.disabled = true;
+    try {
+      await API.libraryUpdate(l.id, {
+        name: $('li-edit-name').value.trim(),
+        description: $('li-edit-desc').value.trim(),
+        tags: editTags,
+        words,
+      });
+      toast('💾 List updated');
+      $('modal-listinfo').style.display = 'none';
+      refreshLibrary();
+      refreshMyLibraryLists();
+    } catch (e) {
+      $('li-edit-error').textContent = e.message;
+    } finally {
+      btn.disabled = false;
     }
   }
 
@@ -3303,7 +3882,7 @@
       const name = file.name.replace(/\.txt$/i, '').slice(0, 40).trim() || 'Imported list';
       if (!words.length) { skipped++; continue; }
       try {
-        const res = await API.libraryUpload({ name, words });
+        const res = await API.libraryUpload({ name, words, description: $('lib-desc').value.trim(), tags: uploadTags });
         cleaned += res.removedBySwearFilter || 0;
         done++;
       } catch (e) { skipped++; }
@@ -3325,13 +3904,20 @@
     const btn = $('btn-lib-upload');
     btn.disabled = true;
     try {
-      const res = await API.libraryUpload({ name, words, author: $('lib-author').value.trim() });
+      const res = await API.libraryUpload({
+        name, words,
+        description: $('lib-desc').value.trim(),
+        tags: uploadTags,
+      });
       const removed = res.removedBySwearFilter || 0;
       toast(removed
         ? `📚 Shared! Swear protection dropped ${removed} word${removed === 1 ? '' : 's'}.`
         : `📚 "${res.list.name}" is in the library!`);
       $('lib-name').value = '';
+      $('lib-desc').value = '';
       $('lib-words').value = '';
+      uploadTags = [];
+      renderTagPicker($('lib-tagpick'), uploadTags);
       $('lib-count').textContent = '0 words';
       showLibTab('browse');
       refreshLibrary();
@@ -3594,6 +4180,113 @@
     });
 
     // ── List library ──
+
+    // ── The library hub ──
+    let libSearchTimer = null;
+    $('lib-q').addEventListener('input', (e) => {
+      const v = e.target.value;
+      $('lib-q-clear').style.display = v ? 'block' : 'none';
+      clearTimeout(libSearchTimer);
+      libSearchTimer = setTimeout(() => { libState.q = v.trim(); refreshLibrary(); }, 250);
+    });
+    $('lib-q-clear').addEventListener('click', () => {
+      $('lib-q').value = '';
+      $('lib-q-clear').style.display = 'none';
+      libState.q = '';
+      refreshLibrary();
+      $('lib-q').focus();
+    });
+    $('lib-sort').addEventListener('change', (e) => { libState.sort = e.target.value; refreshLibrary(); });
+    $('btn-lib-filters').addEventListener('click', () => {
+      const box = $('lib-filters');
+      const open = box.style.display !== 'none';
+      box.style.display = open ? 'none' : 'grid';
+      $('btn-lib-filters').classList.toggle('on', !open);
+    });
+    const filterChanged = () => {
+      libState.difficulty = $('lib-difficulty').value;
+      libState.author = $('lib-author-filter').value.trim();
+      libState.minWords = $('lib-min').value;
+      libState.maxWords = $('lib-max').value;
+      refreshLibrary();
+    };
+    $('lib-difficulty').addEventListener('change', filterChanged);
+    $('lib-author-filter').addEventListener('change', filterChanged);
+    $('lib-min').addEventListener('change', filterChanged);
+    $('lib-max').addEventListener('change', filterChanged);
+    $('btn-lib-reset').addEventListener('click', () => {
+      libState = { q: '', sort: 'popular', tag: '', difficulty: '', author: '', minWords: '', maxWords: '', offset: 0 };
+      $('lib-q').value = '';
+      $('lib-q-clear').style.display = 'none';
+      $('lib-sort').value = 'popular';
+      $('lib-difficulty').value = '';
+      $('lib-author-filter').value = '';
+      $('lib-min').value = '';
+      $('lib-max').value = '';
+      syncTagBar();
+      refreshLibrary();
+    });
+    $('btn-lib-more').addEventListener('click', () => {
+      libState.offset += LIB_PAGE;
+      refreshLibrary(true);
+    });
+
+    // ── One list, up close ──
+    $('btn-li-use').addEventListener('click', () => { if (libSelected) useListInRoom(libSelected.id); });
+    $('btn-li-download').addEventListener('click', () => {
+      if (!libSelected) return;
+      const a = document.createElement('a');
+      a.href = API.libraryDownloadUrl(libSelected.id);
+      a.download = '';
+      a.click();
+    });
+    $('btn-li-edit').addEventListener('click', startListEdit);
+    $('btn-li-cancel').addEventListener('click', () => { $('li-edit').style.display = 'none'; });
+    $('btn-li-save').addEventListener('click', saveListEdit);
+    $('li-edit-words').addEventListener('input', updateEditCount);
+    $('btn-li-delete').addEventListener('click', async () => {
+      if (!libSelected) return;
+      if (!await MiviDialog.confirm(`Take "${libSelected.name}" out of the library?`, { confirmLabel: 'Remove', danger: true })) return;
+      try {
+        await API.libraryDelete(libSelected.id);
+        $('modal-listinfo').style.display = 'none';
+        toast('🗑️ Removed from the library');
+        refreshLibrary();
+        refreshMyLibraryLists();
+      } catch (e) { toast('❌ ' + e.message); }
+    });
+
+    // ── Share a whole zip to the library ──
+    $('btn-lib-zip').addEventListener('click', () => {
+      if (!window.MiviAccount.isLoggedIn()) { showLibTab('upload'); return; }
+      $('lib-zip-file').click();
+    });
+    $('lib-zip-file').addEventListener('change', async (e) => {
+      const file = (e.target.files || [])[0];
+      e.target.value = '';
+      if (!file) return;
+      if (file.size > 8 * 1024 * 1024) { toast('❌ That zip is over the 8 MB limit.'); return; }
+      const btn = $('btn-lib-zip');
+      btn.disabled = true;
+      const errEl = $('lib-error');
+      errEl.textContent = '';
+      try {
+        const res = await API.libraryImportZip({
+          zip: await fileToBase64(file),
+          description: $('lib-desc').value.trim(),
+          tags: uploadTags,
+        });
+        const n = res.lists.length;
+        toast(`📚 Shared ${n} list${n === 1 ? '' : 's'}` + (res.skipped.length ? ` · ${res.skipped.length} skipped` : ''));
+        showLibTab('browse');
+        refreshLibrary();
+      } catch (err) {
+        errEl.textContent = err.message;
+      } finally {
+        btn.disabled = false;
+      }
+    });
+
     $('btn-library').addEventListener('click', openLibrary);
     $('btn-lobby-library').addEventListener('click', openLibrary);
     document.querySelectorAll('#modal-library .tab').forEach(t => t.addEventListener('click', () => showLibTab(t.dataset.libtab)));
@@ -3639,16 +4332,14 @@
       leaveToHome();
     });
     $('btn-gif').addEventListener('click', () => exportGameGif());
-    // ── Spectating ──
-    $('btn-spectate').addEventListener('click', () => {
-      const code = $('home-code').value.trim().toUpperCase();
-      if (!code) { $('home-error').textContent = 'Type the room code you want to watch.'; return; }
+    // ── Public-match voting ──
+    $('btn-poll-yes').addEventListener('click', () => { sfx('click'); socket.emit('votePoll', { yes: true }); });
+    $('btn-poll-no').addEventListener('click', () => { sfx('click'); socket.emit('votePoll', { yes: false }); });
+
+    // ── The artist calls time when there is no clock ──
+    $('btn-finish-drawing').addEventListener('click', () => {
       sfx('click');
-      socket.emit('joinRoom', { code, name: ensureName(), avatar: myAvatar(), spectate: true });
-    });
-    $('toggle-spectate').addEventListener('change', (e) => {
-      sfx('click');
-      socket.emit('setSpectator', { spectate: e.target.checked });
+      socket.emit('finishDrawing');
     });
 
     // ── Last game's GIF, from the lobby ──
@@ -3712,13 +4403,17 @@
       if (e.target === $('modal-gamesettings')) closeGameSettings();
     });
     $('modal-gamesettings').querySelector('.modal-x').addEventListener('click', closeGameSettings);
-    $('opt-canvasBackground').addEventListener('change', (e) => {
-      socket.emit('setGameOptions', { options: { canvasBackground: e.target.value } });
-    });
     window.addEventListener('resize', () => requestAnimationFrame(fitCanvas));
     $('btn-lobby-friends').addEventListener('click', () => window.MiviAccount.openAccount('friends'));
     $('invite-join').addEventListener('click', acceptInvite);
     $('invite-dismiss').addEventListener('click', hideInviteToast);
+
+    wireBackButton();
+    wireClickToType();
+    wireListDrop();
+    wireChatHistory($('game-chat-input'), 'game');
+    wireChatHistory($('lobby-chat-input'), 'lobby');
+    $('btn-vote-list').addEventListener('click', startVoteAddList);
 
     startRoomsPoll();
   });

@@ -145,8 +145,13 @@ async function main() {
     check('only the Classic list ships', created.state.wordLists.available.filter(l => !l.custom).length === 1 && created.state.wordLists.available[0].label === 'Classic');
     const dflt = created.state.options;
     check('new defaults (10 rounds · 90s · 5 words · 5 hints · 10 players · easy)',
-      dflt.rounds === 10 && dflt.roundTime === 90 && dflt.wordChoices === 5 && dflt.hintCount === 5 && dflt.maxPlayers === 10 && dflt.autocorrectStrength === 1 && dflt.textTool === false && dflt.avoidRepeats === true && dflt.canvasBackground === 'plain' && dflt.sceneBackgrounds === false,
+      dflt.rounds === 10 && dflt.roundTime === 90 && dflt.wordChoices === 5 && dflt.hintCount === 5 && dflt.maxPlayers === 10 && dflt.autocorrectStrength === 1 && dflt.textTool === false && dflt.avoidRepeats === true && dflt.sceneBackgrounds === false,
       JSON.stringify(dflt));
+    check('word-pick time defaults to 20s', dflt.pickTime === 20, String(dflt.pickTime));
+    check('custom modes default off',
+      dflt.mirrorMode === false && dflt.oneColorMode === false && dflt.suddenDeath === false && dflt.strokeLimit === 0,
+      JSON.stringify({ m: dflt.mirrorMode, o: dflt.oneColorMode, s: dflt.suddenDeath, l: dflt.strokeLimit }));
+    check('canvas paper is gone', dflt.canvasBackground === undefined);
     const code = created.code;
 
     const B = connect({ guestKey: 'b'.repeat(32), name: 'Guesser', avatar: { emoji: '🐸', color: '#00B894' } });
@@ -513,13 +518,6 @@ async function main() {
     RN.emit('renameCustomList', { name: 'Fresh name', newName: 'classic' });
     check('rename onto an existing list refused', /already a list/i.test((await errRn).message));
 
-    // Canvas paper option
-    p = once(RN, 'stateUpdate');
-    RN.emit('setGameOptions', { options: { canvasBackground: 'grid' } });
-    check('canvas paper set', (await p).options.canvasBackground === 'grid');
-    p = once(RN, 'stateUpdate');
-    RN.emit('setGameOptions', { options: { canvasBackground: 'nonsense' } });
-    check('bogus canvas paper ignored', (await p).options.canvasBackground === 'grid');
     RN.disconnect();
 
     // ═══ 7d3. Scene backdrops + host-only skip ═══
@@ -1129,72 +1127,33 @@ async function main() {
       check('lock combo parts defaults off', st.options.lockComboParts === false, String(st.options.lockComboParts));
       check('show punctuation defaults on', st.options.showPunctuation === true, String(st.options.showPunctuation));
 
-      // Relay depends on co-op, and blind relay depends on relay.
+      // Relay depends on co-op.
       up = once(H, 'stateUpdate');
-      H.emit('setGameOptions', { options: { coopMode: false, relayMode: true, relayBlind: true } });
+      H.emit('setGameOptions', { options: { coopMode: false, relayMode: true } });
       st = await up;
-      check('relay refused without co-op', st.options.relayMode === false && st.options.relayBlind === false,
-        JSON.stringify({ r: st.options.relayMode, b: st.options.relayBlind }));
+      check('relay refused without co-op', st.options.relayMode === false, String(st.options.relayMode));
 
       up = once(H, 'stateUpdate');
-      H.emit('setGameOptions', { options: { coopMode: true, relayMode: true, relayBlind: true } });
+      H.emit('setGameOptions', { options: { coopMode: true, relayMode: true } });
       st = await up;
-      check('relay + blind accepted with co-op', st.options.relayMode === true && st.options.relayBlind === true);
+      check('relay accepted with co-op', st.options.relayMode === true);
+
+      // The new custom modes, and the clamps around them.
+      up = once(H, 'stateUpdate');
+      H.emit('setGameOptions', { options: { mirrorMode: true, oneColorMode: true, suddenDeath: true, strokeLimit: 8, pickTime: 45, roundTime: 0 } });
+      st = await up;
+      check('custom modes stick', st.options.mirrorMode && st.options.oneColorMode && st.options.suddenDeath);
+      check('stroke limit stored', st.options.strokeLimit === 8, String(st.options.strokeLimit));
+      check('pick time stored', st.options.pickTime === 45, String(st.options.pickTime));
+      check('draw time 0 accepted (no clock)', st.options.roundTime === 0, String(st.options.roundTime));
 
       up = once(H, 'stateUpdate');
-      H.emit('setGameOptions', { options: { relayMode: false } });
+      H.emit('setGameOptions', { options: { strokeLimit: 999, pickTime: 999 } });
       st = await up;
-      check('blind relay switches off with relay', st.options.relayBlind === false);
+      check('stroke limit clamped to 50', st.options.strokeLimit === 50, String(st.options.strokeLimit));
+      check('pick time clamped to 60', st.options.pickTime === 60, String(st.options.pickTime));
 
       H.disconnect();
-      await sleep(150);
-    }
-
-    console.log('— spectators —');
-    {
-      const H = connect({ guestKey: 'g-spec-h-' + Date.now() });
-      await once(H, 'welcome');
-      const joined = once(H, 'roomCreated');
-      H.emit('createRoom', { name: 'SpecHost', avatar: '🎨' });
-      const room = await joined;
-      const code = room.code;
-
-      const W = connect({ guestKey: 'g-spec-w-' + Date.now() });
-      await once(W, 'welcome');
-      const wJoined = once(W, 'roomJoined');
-      W.emit('joinRoom', { code, name: 'Watcher', avatar: '👁️', spectate: true });
-      const wState = await wJoined;
-      const watcher = wState.state.players.find(p => p.name === 'Watcher');
-      check('spectator joins the room', !!watcher);
-      check('spectator is flagged', watcher && watcher.spectator === true, JSON.stringify(watcher));
-      check('spectator counted separately', wState.state.spectatorCount === 1, String(wState.state.spectatorCount));
-
-      // Two people, one of them watching, is not enough to start.
-      const errP = once(H, 'error', 3000).catch(() => null);
-      H.emit('startGame');
-      const startErr = await errP;
-      check('a spectator does not make up the numbers', !!startErr, JSON.stringify(startErr));
-
-      // Switching to playing puts them in the rotation.
-      let up = once(H, 'stateUpdate');
-      W.emit('setSpectator', { spectate: false });
-      let st = await up;
-      const nowPlaying = st.players.find(p => p.name === 'Watcher');
-      check('a spectator can join the game', nowPlaying && nowPlaying.spectator === false);
-      check('spectator count drops', st.spectatorCount === 0, String(st.spectatorCount));
-
-      // And back again.
-      up = once(H, 'stateUpdate');
-      W.emit('setSpectator', { spectate: true });
-      st = await up;
-      check('a player can sit out', st.players.find(p => p.name === 'Watcher').spectator === true);
-
-      // The host may not sit out — someone has to run the room.
-      const hostErr = once(H, 'error', 3000).catch(() => null);
-      H.emit('setSpectator', { spectate: true });
-      check('the host cannot become a spectator', !!(await hostErr));
-
-      H.disconnect(); W.disconnect();
       await sleep(150);
     }
 
@@ -1276,10 +1235,10 @@ async function main() {
       // roundTime 36 -> a 3-second slice, so the baton swaps quickly.
       RH.emit('setGameOptions', { options: {
         roundTime: 36, hintCount: 0, wordChoices: 0,
-        coopMode: true, relayMode: true, relayBlind: true,
+        coopMode: true, relayMode: true,
       } });
       const opts = await up;
-      check('relay options stick', opts.options.relayMode && opts.options.relayBlind);
+      check('relay options stick', opts.options.relayMode === true);
 
       // Collect the baton events from the guesser's socket (everyone gets them).
       const holders = [];
@@ -1290,14 +1249,9 @@ async function main() {
       // The co-op partner is drawn at random from everyone else, so watch
       // all three sockets rather than guessing who it will be.
       const cast = [[RH, 'RelayHost'], [R2, 'Partner'], [R3, 'Guesser']];
-      let blindFor = null;
       const wordSeenBy = [];
-      const choicesSeenBy = [];
       for (const [sock, who] of cast) {
-        sock.on('blindArtist', () => { blindFor = who; });
         sock.on('yourWord', () => wordSeenBy.push(who));
-        // Even a read-only peek at the choices would give the word away.
-        sock.on('wordChoices', () => choicesSeenBy.push(who));
       }
 
       const ds = await (async () => {
@@ -1311,12 +1265,11 @@ async function main() {
       const nameOf = (id) => (ds.players.find(p => p.id === id) || {}).name;
       const drawerName = nameOf(ds.drawerId);
       const partnerName = nameOf(ds.coopPartnerId);
-      check('only the lead artist is told the word', wordSeenBy.length === 1 && wordSeenBy[0] === drawerName,
-        JSON.stringify({ wordSeenBy, drawerName }));
-      check('the partner draws blind', blindFor === partnerName, JSON.stringify({ blindFor, partnerName }));
-      check('the guesser is told nothing', wordSeenBy.indexOf(nameOf(ds.players.find(p => p.id !== ds.drawerId && p.id !== ds.coopPartnerId).id)) === -1);
-      check('the blind partner never sees the word choices',
-        choicesSeenBy.indexOf(partnerName) === -1, JSON.stringify({ choicesSeenBy, partnerName }));
+      check('both artists are told the word', wordSeenBy.length === 2
+        && wordSeenBy.indexOf(drawerName) !== -1 && wordSeenBy.indexOf(partnerName) !== -1,
+        JSON.stringify({ wordSeenBy, drawerName, partnerName }));
+      const guesserName = nameOf(ds.players.find(p => p.id !== ds.drawerId && p.id !== ds.coopPartnerId).id);
+      check('the guesser is never told the word', wordSeenBy.indexOf(guesserName) === -1, JSON.stringify(wordSeenBy));
       check('the baton starts with someone', holders.length >= 1, JSON.stringify(holders));
 
       // The artist who does NOT hold the pen must not be able to draw.
@@ -1380,6 +1333,278 @@ async function main() {
       check('a moderator needs an API key', g.status === 400 && /API key/i.test(g.data.error || ''), JSON.stringify(g.data));
       g = await rest('POST', '/mod/generate-list', { apiKey: 'sk-x' }, tokenM);
       check('a moderator needs a topic', g.status === 400 && /topic/i.test(g.data.error || ''), JSON.stringify(g.data));
+    }
+
+
+    console.log('— one lobby at a time —');
+    {
+      const sharedKey = 'ab' + Date.now().toString(16).padStart(14, '0');
+      const A1 = connect({ guestKey: sharedKey });
+      await once(A1, 'welcome');
+      let rp = once(A1, 'roomCreated');
+      A1.emit('createRoom', { name: 'Solo', avatar: '🎨' });
+      const firstCode = (await rp).code;
+
+      // A second room, same identity, from a second socket.
+      const A2 = connect({ guestKey: sharedKey });
+      await once(A2, 'welcome');
+      const failed = once(A2, 'error', 4000).catch(() => null);
+      A2.emit('createRoom', { name: 'Solo', avatar: '🎨' });
+      const err = await failed;
+      check('you cannot sit in two rooms at once', !!err && /another tab/i.test(err.message || ''), JSON.stringify(err));
+
+      // Once the first seat is gone, the room is free to take.
+      A1.disconnect();
+      await sleep(300);
+      const okRoom = once(A2, 'roomCreated', 6000).catch(() => null);
+      A2.emit('createRoom', { name: 'Solo', avatar: '🎨' });
+      check('a stale seat is given up', !!(await okRoom));
+      A2.disconnect();
+      await sleep(150);
+    }
+
+    console.log('— custom modes —');
+    {
+      const MH = connect({ guestKey: 'g-mode-h-' + Date.now() });
+      await once(MH, 'welcome');
+      let rp = once(MH, 'roomCreated');
+      MH.emit('createRoom', { name: 'ModeHost', avatar: '🎨' });
+      const mCode = (await rp).code;
+      const MG = connect({ guestKey: 'g-mode-g-' + Date.now() });
+      await once(MG, 'welcome');
+      rp = once(MG, 'roomJoined');
+      MG.emit('joinRoom', { code: mCode, name: 'ModeGuesser', avatar: '🐱' });
+      await rp;
+
+      let up = once(MH, 'stateUpdate');
+      MH.emit('addCustomList', { name: 'Modes', text: 'rocket' });
+      await up;
+      up = once(MH, 'stateUpdate');
+      MH.emit('setWordLists', { lists: ['Modes'], weights: { Modes: 1 } });
+      await up;
+      up = once(MH, 'stateUpdate');
+      MH.emit('setGameOptions', { options: {
+        roundTime: 60, hintCount: 0, wordChoices: 0,
+        mirrorMode: true, oneColorMode: true, strokeLimit: 2,
+      } });
+      await up;
+
+      const ds = await (async () => {
+        const p2 = once(MG, 'drawingStart', 12000);
+        MH.emit('startGame');
+        return p2;
+      })();
+      check('one colour picks a colour for the round', /^#[0-9a-f]{6}$/i.test(ds.roundColor || ''), String(ds.roundColor));
+      check('the stroke limit reaches the client', ds.strokeLimit === 2, String(ds.strokeLimit));
+
+      // Mirror: what the guesser receives is flipped from what was sent.
+      const seen = once(MG, 'draw', 5000);
+      MH.emit('draw', { type: 'line', x1: 100, y1: 50, x2: 200, y2: 60, color: '#123456', size: 6 });
+      const ev = await seen;
+      check('mirror flips the x coordinates', ev.x1 === 900 && ev.x2 === 800, JSON.stringify({ x1: ev.x1, x2: ev.x2 }));
+      check('mirror leaves y alone', ev.y1 === 50 && ev.y2 === 60, JSON.stringify({ y1: ev.y1, y2: ev.y2 }));
+      check('one colour overrides what the artist sent', ev.color === ds.roundColor, ev.color + ' vs ' + ds.roundColor);
+
+      // Stroke budget: two strokes, then nothing more gets through.
+      const b1 = once(MG, 'strokeBudget', 4000);
+      MH.emit('strokeEnd');
+      const budget1 = await b1;
+      check('strokes are counted', budget1.used === 1 && budget1.limit === 2, JSON.stringify(budget1));
+      const b2 = once(MG, 'strokeBudget', 4000);
+      MH.emit('draw', { type: 'line', x1: 10, y1: 10, x2: 20, y2: 20, color: '#123456', size: 6 });
+      MH.emit('strokeEnd');
+      const budget2 = await b2;
+      check('the budget runs down', budget2.used === 2, JSON.stringify(budget2));
+
+      let leaked = false;
+      const spy = () => { leaked = true; };
+      MG.on('draw', spy);
+      MH.emit('draw', { type: 'line', x1: 30, y1: 30, x2: 40, y2: 40, color: '#123456', size: 6 });
+      await sleep(400);
+      MG.off('draw', spy);
+      check('drawing stops once the strokes run out', !leaked);
+
+      MH.disconnect(); MG.disconnect();
+      await sleep(200);
+    }
+
+    console.log('— sudden death & no clock —');
+    {
+      const SH = connect({ guestKey: 'g-sd-h-' + Date.now() });
+      await once(SH, 'welcome');
+      let rp = once(SH, 'roomCreated');
+      SH.emit('createRoom', { name: 'SDHost', avatar: '🎨' });
+      const sCode = (await rp).code;
+      const S2 = connect({ guestKey: 'g-sd-2-' + Date.now() });
+      await once(S2, 'welcome');
+      rp = once(S2, 'roomJoined');
+      S2.emit('joinRoom', { code: sCode, name: 'SD2', avatar: '🐱' });
+      await rp;
+      const S3 = connect({ guestKey: 'g-sd-3-' + Date.now() });
+      await once(S3, 'welcome');
+      rp = once(S3, 'roomJoined');
+      S3.emit('joinRoom', { code: sCode, name: 'SD3', avatar: '🐶' });
+      await rp;
+
+      let up = once(SH, 'stateUpdate');
+      SH.emit('addCustomList', { name: 'SD', text: 'rocket' });
+      await up;
+      up = once(SH, 'stateUpdate');
+      SH.emit('setWordLists', { lists: ['SD'], weights: { SD: 1 } });
+      await up;
+      up = once(SH, 'stateUpdate');
+      // No clock at all, and the first guess takes the round.
+      SH.emit('setGameOptions', { options: { roundTime: 0, hintCount: 0, wordChoices: 0, suddenDeath: true } });
+      await up;
+
+      const ds = await (async () => {
+        const p2 = once(S2, 'drawingStart', 12000);
+        SH.emit('startGame');
+        return p2;
+      })();
+      check('an untimed round reports no clock', ds.roundSeconds === 0, String(ds.roundSeconds));
+
+      // With no clock, the timer must not tick down to an early finish.
+      const t1 = await once(S2, 'timerTick', 4000);
+      check('the clock does not run', t1.untimed === true && t1.timeLeft === 0, JSON.stringify(t1));
+
+      // Only one of the two guessers needs to get it.
+      const ended = once(S2, 'roundEnd', 8000);
+      S2.emit('guess', { text: 'rocket' });
+      const re = await ended;
+      check('sudden death ends the round on the first guess', !!re && re.word === 'rocket', JSON.stringify(re && re.word));
+
+      SH.disconnect(); S2.disconnect(); S3.disconnect();
+      await sleep(200);
+    }
+
+    console.log('— public-match voting —');
+    {
+      // Three in a public match so a vote can actually carry.
+      const socks = [];
+      for (let i = 0; i < 3; i++) {
+        const s = connect({ guestKey: 'g-vote-' + i + '-' + Date.now() });
+        await once(s, 'welcome');
+        const j = once(s, 'roomJoined');
+        s.emit('quickPlay', { name: 'Voter' + i, avatar: '🎨' });
+        await j;
+        socks.push(s);
+      }
+      const [V0, V1, V2] = socks;
+
+      // Private-room rules do not apply here — there is no host to ask.
+      const started = once(V1, 'poll', 5000);
+      V0.emit('startPoll', { kind: 'addList', name: 'Voted list', text: 'apple\nbanana\ncherry' });
+      const poll = await started;
+      check('a vote starts', !!poll && poll.kind === 'addList', JSON.stringify(poll));
+      check('the proposer counts as a yes', poll.yes === 1, String(poll.yes));
+      check('the vote says what it needs', poll.needed >= 2, JSON.stringify({ needed: poll.needed, eligible: poll.eligible }));
+
+      // One more yes carries it.
+      const stateAfter = once(V0, 'stateUpdate', 6000);
+      V1.emit('votePoll', { yes: true });
+      const st = await stateAfter;
+      check('a carried vote adds the list',
+        st.wordLists.available.some(l => l.name === 'Voted list'),
+        JSON.stringify(st.wordLists.available.map(l => l.name)));
+
+      // A second vote from the same person is refused while cooling down.
+      const cool = once(V0, 'error', 4000).catch(() => null);
+      V0.emit('startPoll', { kind: 'kick', playerId: 'nobody' });
+      check('proposers have a cooldown', !!(await cool));
+
+      for (const s of socks) s.disconnect();
+      await sleep(200);
+    }
+
+    console.log('— unique usernames & friends by name —');
+    {
+      const n = Math.floor(Math.random() * 1e6);
+      const t1 = (await rest('POST', '/auth/test-login', { username: 'Twin' + n })).data;
+      check('first account keeps the name', t1.user.username === 'Twin' + n, t1.user.username);
+
+      // A rename onto a taken name is refused.
+      const t2 = (await rest('POST', '/auth/test-login', { username: 'Other' + n })).data;
+      let r = await rest('PUT', '/auth/me', { username: 'Twin' + n }, t2.token);
+      check('a taken username is refused', r.status === 409, JSON.stringify(r.data));
+
+      // Friend requests work by username.
+      r = await rest('POST', '/friends/request', { username: 'Twin' + n }, t2.token);
+      check('friend request by username', r.status === 200 && r.data.ok, JSON.stringify(r.data));
+      r = await rest('POST', '/friends/request', { username: 'nobody-at-all-' + n }, t2.token);
+      check('an unknown username is a clear 404', r.status === 404 && /username/i.test(r.data.error || ''), JSON.stringify(r.data));
+    }
+
+    console.log('— library hub —');
+    {
+      const tokenL = (await rest('POST', '/auth/test-login', { username: 'librarian' + Math.floor(Math.random() * 1e6) })).data.token;
+      let r = await rest('POST', '/library', {
+        name: 'Deep sea things',
+        description: 'Creatures and objects from the bottom of the ocean.',
+        tags: ['animals', 'nature', 'nonsense-tag'],
+        words: ['squid', 'anglerfish', 'shipwreck', 'coral'],
+      }, tokenL);
+      check('a shared list keeps its description', r.status === 200 && r.data.list.description.startsWith('Creatures'), JSON.stringify(r.data.list));
+      check('only real tags survive', JSON.stringify(r.data.list.tags) === '["animals","nature"]', JSON.stringify(r.data.list.tags));
+      check('difficulty is worked out', ['easy', 'medium', 'hard'].includes(r.data.list.difficulty), r.data.list.difficulty);
+      check('a preview comes back', Array.isArray(r.data.list.preview) && r.data.list.preview.length > 0);
+      const libId = r.data.list.id;
+
+      r = await rest('GET', '/library?q=anglerfish');
+      check('search finds a list by a word inside it', r.data.lists.some(l => l.id === libId), JSON.stringify(r.data.total));
+      r = await rest('GET', '/library?q=bottom of the ocean');
+      check('search reads the description', r.data.lists.some(l => l.id === libId));
+      r = await rest('GET', '/library?tag=animals');
+      check('filtering by tag works', r.data.lists.some(l => l.id === libId));
+      r = await rest('GET', '/library?tag=sport');
+      check('a tag with no matches returns nothing', !r.data.lists.some(l => l.id === libId));
+      r = await rest('GET', '/library?minWords=99');
+      check('the word-count filter applies', !r.data.lists.some(l => l.id === libId));
+      r = await rest('GET', '/library');
+      check('facets come back for the filter UI', Array.isArray(r.data.facets.tags) && Array.isArray(r.data.facets.authors));
+
+      r = await rest('PUT', '/library/' + libId, {
+        description: 'Updated description here.',
+        tags: ['places'],
+        words: ['squid', 'kraken'],
+      }, tokenL);
+      check('an owner can edit their list', r.status === 200 && r.data.list.count === 2, JSON.stringify(r.data.list));
+      check('the edit updates the description', r.data.list.description === 'Updated description here.');
+      check('the edit updates the tags', JSON.stringify(r.data.list.tags) === '["places"]');
+
+      const tokenX = (await rest('POST', '/auth/test-login', { username: 'stranger' + Math.floor(Math.random() * 1e6) })).data.token;
+      r = await rest('PUT', '/library/' + libId, { name: 'Hijacked' }, tokenX);
+      check('somebody else cannot edit it', r.status === 404, JSON.stringify(r.data));
+
+      // Sharing a zip straight to the library.
+      const zip = require('../lib/zip');
+      const buf = zip.zipTextFiles([{ name: 'Shared A', content: 'one\ntwo' }, { name: 'Shared B', content: 'three' }]);
+      r = await rest('POST', '/library/import-zip', { zip: buf.toString('base64'), description: 'From a zip', tags: ['games'] }, tokenL);
+      check('a zip can be shared to the library', r.status === 200 && r.data.lists.length === 2, JSON.stringify(r.data).slice(0, 140));
+      check('zipped lists carry the description', r.data.lists.every(l => l.description === 'From a zip'));
+      r = await rest('POST', '/library/import-zip', { zip: buf.toString('base64') });
+      check('guests cannot share a zip', r.status === 401);
+    }
+
+    console.log('— gallery holds GIFs —');
+    {
+      const tokenG = (await rest('POST', '/auth/test-login', { username: 'giffer' + Math.floor(Math.random() * 1e6) })).data.token;
+      // A minimal but real GIF89a header.
+      const gifBytes = Buffer.concat([Buffer.from('GIF89a', 'latin1'), Buffer.alloc(20, 1)]);
+      let r = await rest('POST', '/drawings', {
+        dataUrl: 'data:image/gif;base64,' + gifBytes.toString('base64'),
+        word: 'Game recap · 4 rounds', artist: 'giffer',
+      }, tokenG);
+      check('a GIF can be saved to the gallery', r.status === 200 && r.data.ok, JSON.stringify(r.data));
+      const gifId = r.data.id;
+      r = await rest('GET', '/drawings', undefined, tokenG);
+      check('the gallery marks it as a gif', r.data.drawings.some(d => d.id === gifId && d.kind === 'gif'), JSON.stringify(r.data.drawings));
+
+      const img = await fetch(BASE + '/api/drawings/' + gifId + '/image');
+      check('it is served as image/gif', (img.headers.get('content-type') || '').includes('image/gif'), img.headers.get('content-type'));
+
+      r = await rest('POST', '/drawings', { dataUrl: 'data:image/gif;base64,' + Buffer.from('NOTAGIF').toString('base64') }, tokenG);
+      check('something that is not a GIF is refused', r.status === 400, JSON.stringify(r.data));
     }
 
   } catch (e) {

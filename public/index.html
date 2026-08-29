@@ -119,7 +119,6 @@
             <button class="btn btn-big" id="btn-join">Join</button>
           </div>
         </div>
-        <button class="btn btn-small btn-ghost btn-spectate" id="btn-spectate" title="Watch a room without joining the rotation">👁️ Watch instead</button>
         <button class="btn btn-big" id="btn-rejoin-activity" style="display:none">🎮 Back to your channel's game</button>
         <button class="btn btn-big btn-alt btn-library" id="btn-library">📚 List library <span class="btn-library-sub">grab word lists other people made, or share your own</span></button>
       </div>
@@ -157,18 +156,30 @@
           <button class="btn btn-small btn-alt btn-wide" id="btn-lobby-friends" style="display:none">👥 Invite friends</button>
           <button class="btn btn-small btn-wide" id="btn-activity-custom" style="display:none">✨ Start a custom game</button>
           <button class="btn btn-small btn-alt btn-wide" id="btn-activity-back" style="display:none">🎮 Back to the channel game</button>
-          <label class="toggle-row" id="public-toggle-row" style="display:none">
+          <button class="btn btn-small btn-alt btn-wide" id="btn-lobby-gif" style="display:none">🎬 Save last game as a GIF</button>
+          <label class="toggle-row room-public-row" id="public-toggle-row" style="display:none">
             <input type="checkbox" id="toggle-public" class="switch" />
             <span>List publicly<span class="toggle-hint">Anyone can find &amp; join this room</span></span>
           </label>
-          <div class="spectating-banner" id="spectating-banner" style="display:none">👁️ You're watching this one — untick below to join in.</div>
-          <label class="toggle-row" id="spectate-toggle-row">
-            <input type="checkbox" id="toggle-spectate" class="switch" />
-            <span>Watch only<span class="toggle-hint">Sit this one out — you keep the chat, but skip the drawing rotation</span></span>
-          </label>
-          <button class="btn btn-small btn-alt btn-wide" id="btn-lobby-gif" style="display:none">🎬 Save last game as a GIF</button>
           <div class="autostart-banner" id="autostart-banner" style="display:none"></div>
           <div class="activity-note" id="activity-note" style="display:none"></div>
+        </div>
+
+        <div class="card poll-card" id="poll-card" style="display:none">
+          <div class="poll-head">
+            <span class="poll-icon" id="poll-icon">🗳️</span>
+            <div class="poll-text">
+              <div class="poll-q" id="poll-q"></div>
+              <div class="poll-detail" id="poll-detail"></div>
+            </div>
+            <span class="poll-clock" id="poll-clock"></span>
+          </div>
+          <div class="poll-bar"><i id="poll-bar-fill"></i></div>
+          <div class="poll-tally" id="poll-tally"></div>
+          <div class="poll-actions" id="poll-actions">
+            <button class="btn btn-small poll-yes" id="btn-poll-yes">👍 Yes</button>
+            <button class="btn btn-small btn-alt poll-no" id="btn-poll-no">👎 No</button>
+          </div>
         </div>
 
         <div class="card players-card-lobby">
@@ -195,6 +206,7 @@
             <div class="card-title">📚 Word lists</div>
             <span class="mini-btn-row">
               <button class="mini-btn" id="btn-lobby-library">📚 Library</button>
+              <button class="mini-btn" id="btn-vote-list" style="display:none" title="Put a word list to the room">🗳️ Suggest a list</button>
               <button class="mini-btn" id="btn-zip-lists" title="Download every list in this room as a .zip">⬇️ Download all</button>
               <button class="mini-btn" id="btn-list-odds">ℹ️ Odds</button>
             </span>
@@ -251,22 +263,27 @@ t-shirt</pre>
           <div class="card-title">🎛️ Game options</div>
           <p class="card-hint">Tap the <b>?</b> beside any setting to see what it does.</p>
 
+          <div class="opt-grid">
+            <div class="opt" data-help="rounds"><label>Rounds</label><input type="range" id="opt-rounds" min="0" max="50" value="10" /><span class="opt-val" id="opt-rounds-val">10</span></div>
+            <div class="opt" data-help="roundTime"><label>Draw time</label><input type="range" id="opt-roundTime" min="0" max="240" step="10" value="90" /><span class="opt-val" id="opt-roundTime-val">90s</span></div>
+            <div class="opt" data-help="wordChoices"><label>Word choices</label><input type="range" id="opt-wordChoices" min="0" max="25" value="5" /><span class="opt-val" id="opt-wordChoices-val">5</span></div>
+            <div class="opt" data-help="pickTime"><label>Pick time</label><input type="range" id="opt-pickTime" min="5" max="60" step="5" value="20" /><span class="opt-val" id="opt-pickTime-val">20s</span></div>
+            <div class="opt" data-help="hintCount"><label>Hints</label><input type="range" id="opt-hintCount" min="0" max="12" value="5" /><span class="opt-val" id="opt-hintCount-val">5</span></div>
+            <div class="opt" data-help="hintSpeed"><label>Hint timing</label><input type="range" id="opt-hintSpeed" min="0" max="2" value="1" /><span class="opt-val" id="opt-hintSpeed-val">Even</span></div>
+            <div class="opt" data-help="maxPlayers"><label>Max players</label><input type="range" id="opt-maxPlayers" min="2" max="20" value="10" /><span class="opt-val" id="opt-maxPlayers-val">10</span></div>
+            <div class="opt" data-help="autocorrectStrength"><label>Autocorrect</label><input type="range" id="opt-autocorrectStrength" min="0" max="3" value="1" /><span class="opt-val" id="opt-autocorrectStrength-val">Easy</span></div>
+          </div>
+
           <div class="opt-section">
-            <div class="opt-section-title">⏱️ The match</div>
-            <div class="opt-grid">
-              <div class="opt" data-help="rounds"><label>Rounds</label><input type="range" id="opt-rounds" min="0" max="50" value="10" /><span class="opt-val" id="opt-rounds-val">10</span></div>
-              <div class="opt" data-help="roundTime"><label>Draw time</label><input type="range" id="opt-roundTime" min="30" max="240" step="10" value="90" /><span class="opt-val" id="opt-roundTime-val">90s</span></div>
-              <div class="opt" data-help="maxPlayers"><label>Max players</label><input type="range" id="opt-maxPlayers" min="2" max="20" value="10" /><span class="opt-val" id="opt-maxPlayers-val">10</span></div>
+            <div class="opt-section-title">🎲 Shake it up</div>
+            <div class="opt-toggles">
+              <label class="toggle-row" data-help="randomRoundTime"><input type="checkbox" id="opt-randomRoundTime" class="switch" /><span>Random draw time<span class="toggle-hint">A different clock every round, up to the slider</span></span></label>
+              <label class="toggle-row" data-help="randomWordChoices"><input type="checkbox" id="opt-randomWordChoices" class="switch" /><span>Random word count<span class="toggle-hint">A different number of words to pick from each turn</span></span></label>
             </div>
           </div>
 
           <div class="opt-section">
             <div class="opt-section-title">🔤 Words &amp; guessing</div>
-            <div class="opt-grid">
-              <div class="opt" data-help="wordChoices"><label>Word choices</label><input type="range" id="opt-wordChoices" min="0" max="25" value="5" /><span class="opt-val" id="opt-wordChoices-val">5</span></div>
-              <div class="opt" data-help="hintCount"><label>Hints</label><input type="range" id="opt-hintCount" min="0" max="5" value="5" /><span class="opt-val" id="opt-hintCount-val">5</span></div>
-              <div class="opt" data-help="autocorrectStrength"><label>Autocorrect</label><input type="range" id="opt-autocorrectStrength" min="0" max="3" value="1" /><span class="opt-val" id="opt-autocorrectStrength-val">Easy</span></div>
-            </div>
             <div class="opt-toggles">
               <label class="toggle-row" data-help="hidden"><input type="checkbox" id="opt-hidden" class="switch" /><span>Hidden mode<span class="toggle-hint">No hints and no letter count</span></span></label>
               <label class="toggle-row" data-help="showPunctuation"><input type="checkbox" id="opt-showPunctuation" class="switch" checked /><span>Show punctuation<span class="toggle-hint">Hyphens and apostrophes appear in the blanks for free</span></span></label>
@@ -282,31 +299,23 @@ t-shirt</pre>
               <label class="toggle-row opt-child" data-help="lockComboParts"><input type="checkbox" id="opt-lockComboParts" class="switch" /><span>Lock combo parts<span class="toggle-hint">Half-right guesses bank that half</span></span></label>
               <label class="toggle-row" data-help="coopMode"><input type="checkbox" id="opt-coopMode" class="switch" /><span>Co-op drawing<span class="toggle-hint">Two artists per round (needs 3+ players)</span></span></label>
               <label class="toggle-row opt-child" data-help="relayMode"><input type="checkbox" id="opt-relayMode" class="switch" /><span>Relay pen<span class="toggle-hint">The two artists take turns, swapping every few seconds</span></span></label>
-              <label class="toggle-row opt-child opt-child-2" data-help="relayBlind"><input type="checkbox" id="opt-relayBlind" class="switch" /><span>Blind relay<span class="toggle-hint">The second artist never finds out the word</span></span></label>
+            </div>
+            <div class="opt-toggles">
+              <label class="toggle-row" data-help="mirrorMode"><input type="checkbox" id="opt-mirrorMode" class="switch" /><span>🪞 Mirror<span class="toggle-hint">Everything lands flipped left-to-right — draw it backwards</span></span></label>
+              <label class="toggle-row" data-help="oneColorMode"><input type="checkbox" id="opt-oneColorMode" class="switch" /><span>🎨 One colour<span class="toggle-hint">A different single colour every round, no palette</span></span></label>
+              <label class="toggle-row" data-help="suddenDeath"><input type="checkbox" id="opt-suddenDeath" class="switch" /><span>⚡ Sudden death<span class="toggle-hint">The first correct guess ends the round on the spot</span></span></label>
+            </div>
+            <div class="opt-grid">
+              <div class="opt" data-help="strokeLimit"><label>Stroke limit</label><input type="range" id="opt-strokeLimit" min="0" max="50" value="0" /><span class="opt-val" id="opt-strokeLimit-val">Off</span></div>
             </div>
           </div>
 
           <div class="opt-section">
             <div class="opt-section-title">🖌️ The canvas</div>
-            <div class="opt-extra" data-help="canvasBackground">
-              <label>Canvas paper</label>
-              <select id="opt-canvasBackground" class="input select">
-                <option value="plain">Plain</option>
-                <option value="grid">Graph grid</option>
-                <option value="dots">Dot grid</option>
-                <option value="lined">Lined paper</option>
-              </select>
-            </div>
             <div class="opt-toggles">
               <label class="toggle-row" data-help="sceneBackgrounds"><input type="checkbox" id="opt-sceneBackgrounds" class="switch" /><span>Scene backdrops<span class="toggle-hint">Artists can drop a scene behind their drawing</span></span></label>
               <label class="toggle-row" data-help="textTool"><input type="checkbox" id="opt-textTool" class="switch" /><span>Text &amp; emoji tools<span class="toggle-hint">Artists can type and stamp on the canvas</span></span></label>
               <label class="toggle-row" data-help="lockOnGuess"><input type="checkbox" id="opt-lockOnGuess" class="switch" /><span>Pens down<span class="toggle-hint">The drawing freezes when the first person guesses</span></span></label>
-            </div>
-          </div>
-
-          <div class="opt-section">
-            <div class="opt-section-title">🛡️ The room</div>
-            <div class="opt-toggles">
               <label class="toggle-row" data-help="spamProtection"><input type="checkbox" id="opt-spamProtection" class="switch" checked /><span>Spam protection<span class="toggle-hint">Mutes people who flood the chat</span></span></label>
             </div>
           </div>
@@ -350,6 +359,8 @@ t-shirt</pre>
       </aside>
 
       <div class="canvas-card card" id="canvas-card">
+        <div class="mode-banner" id="mode-banner" style="display:none"></div>
+        <button class="btn btn-small btn-done-drawing" id="btn-finish-drawing" style="display:none">🖐️ I'm done — reveal it</button>
         <div class="canvas-frame" id="canvas-frame">
           <canvas id="canvas"></canvas>
           <canvas id="canvas-preview"></canvas>
@@ -482,28 +493,90 @@ t-shirt</pre>
 </div>
 
 <div class="modal-backdrop" id="modal-library" style="display:none">
-  <div class="modal modal-lg">
+  <div class="modal modal-xl">
     <button class="modal-x" data-close="modal-library">✕</button>
     <h2>📚 List library</h2>
-    <p class="modal-sub">Word lists shared by other players. Take what you like, leave something good behind.</p>
+    <p class="modal-sub">Every word list the community has shared. Search it, take what you like, leave something good behind.</p>
     <div class="tabs" id="lib-tabs">
       <button class="tab active" data-libtab="browse">Browse</button>
+      <button class="tab" data-libtab="mine">My lists</button>
       <button class="tab" data-libtab="upload">Share a list</button>
     </div>
+
     <div class="tab-pane active" id="libtab-browse">
-      <div class="lists-toolbar">
-        <button class="btn btn-small" id="btn-lib-new">➕ Add a list</button>
-        <button class="btn btn-small btn-alt" id="btn-lib-folder">📁 Add a folder of lists</button>
-        <input type="file" id="lib-folder-input" accept=".txt" multiple webkitdirectory directory style="display:none" />
-        <span class="lists-note" id="lib-count-note"></span>
+      <div class="lib-search-row">
+        <div class="lib-search">
+          <span class="lib-search-icon">🔍</span>
+          <input type="search" id="lib-q" class="input" placeholder="Search names, descriptions, authors — or a word inside a list" maxlength="60" />
+          <button class="lib-search-clear" id="lib-q-clear" title="Clear" style="display:none">✕</button>
+        </div>
+        <select id="lib-sort" class="input select lib-sort">
+          <option value="popular">Most downloaded</option>
+          <option value="newest">Newest</option>
+          <option value="oldest">Oldest</option>
+          <option value="biggest">Most words</option>
+          <option value="smallest">Fewest words</option>
+          <option value="name">A–Z</option>
+        </select>
+        <button class="btn btn-small btn-alt" id="btn-lib-filters">⚙️ Filters</button>
       </div>
-      <div class="lists-rows" id="lib-rows"></div>
-      <p class="gallery-empty" id="lib-empty" style="display:none">Nothing in here yet. Someone has to go first — might as well be you.</p>
+
+      <div class="lib-tagbar" id="lib-tagbar"></div>
+
+      <div class="lib-filters" id="lib-filters" style="display:none">
+        <div class="lib-filter">
+          <label for="lib-difficulty">Difficulty</label>
+          <select id="lib-difficulty" class="input select">
+            <option value="">Any</option>
+            <option value="easy">Easy — short, single words</option>
+            <option value="medium">Medium</option>
+            <option value="hard">Hard — long or multi-word</option>
+          </select>
+        </div>
+        <div class="lib-filter">
+          <label for="lib-author-filter">Author</label>
+          <input type="text" id="lib-author-filter" class="input" placeholder="Anyone" maxlength="40" list="lib-authors" />
+          <datalist id="lib-authors"></datalist>
+        </div>
+        <div class="lib-filter">
+          <label for="lib-min">Least words</label>
+          <input type="number" id="lib-min" class="input" min="0" max="5000" placeholder="0" />
+        </div>
+        <div class="lib-filter">
+          <label for="lib-max">Most words</label>
+          <input type="number" id="lib-max" class="input" min="0" max="5000" placeholder="∞" />
+        </div>
+        <button class="btn btn-small btn-alt" id="btn-lib-reset">Reset filters</button>
+      </div>
+
+      <div class="lib-resultbar">
+        <span class="lists-note" id="lib-count-note"></span>
+        <span class="mini-btn-row">
+          <button class="mini-btn" id="btn-lib-new">➕ Add to a room</button>
+          <button class="mini-btn" id="btn-lib-folder">📁 Add a folder</button>
+        </span>
+        <input type="file" id="lib-folder-input" accept=".txt" multiple webkitdirectory directory style="display:none" />
+      </div>
+
+      <div class="lib-cards" id="lib-rows"></div>
+      <p class="gallery-empty" id="lib-empty" style="display:none">Nothing matches that. Try a broader search — or be the one who shares it.</p>
+      <button class="btn btn-small btn-alt btn-wide" id="btn-lib-more" style="display:none">Show more</button>
     </div>
+
+    <div class="tab-pane" id="libtab-mine">
+      <p class="modal-sub" id="lib-mine-note">Lists you've shared. Editing one updates it for everybody who hasn't downloaded it yet.</p>
+      <div class="lib-cards" id="lib-mine-rows"></div>
+      <p class="gallery-empty" id="lib-mine-empty" style="display:none">You haven't shared anything yet. The Share tab is right there.</p>
+    </div>
+
     <div class="tab-pane" id="libtab-upload">
       <div class="form" id="lib-upload-form">
         <input type="text" id="lib-name" class="input" placeholder="List name" maxlength="40" />
-        <input type="text" id="lib-author" class="input" placeholder="Your name (shown next to the list)" maxlength="20" />
+        <textarea id="lib-desc" class="input textarea" rows="2" maxlength="300" placeholder="Describe it — what's in it, who it's for, how hard it is. This is what people read before downloading."></textarea>
+        <div class="lib-tagpick">
+          <span class="lib-tagpick-label">Tags <span class="toggle-hint">pick up to 4</span></span>
+          <div class="lib-tagpick-row" id="lib-tagpick"></div>
+        </div>
         <textarea id="lib-words" class="input textarea" rows="7" placeholder="One word per line, or commas between them"></textarea>
         <details class="format-tip">
             <summary>How to write a list</summary>
@@ -521,6 +594,8 @@ t-shirt</pre>
           <button class="btn btn-small btn-alt" id="btn-lib-import">📂 Import .txt</button>
           <input type="file" id="lib-file" accept=".txt" style="display:none" />
           <button class="btn btn-small btn-alt" id="btn-lib-folder2">📁 Whole folder</button>
+          <button class="btn btn-small btn-alt" id="btn-lib-zip">🗜️ Share a .zip</button>
+          <input type="file" id="lib-zip-file" accept=".zip,application/zip" style="display:none" />
           <button class="btn btn-small" id="btn-lib-upload">⬆️ Share it</button>
         </div>
         <p class="toggle-hint">Swear protection runs on everything shared here — rude words get quietly dropped before anyone sees them.</p>
@@ -530,6 +605,39 @@ t-shirt</pre>
         <p class="auth-note">Sharing to the library needs an account, so every list has a real name on it. Sign in with Discord and you're good.</p>
         <button class="btn btn-big" id="btn-lib-signin">Sign in to share</button>
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- One list, in detail: what's in it, who made it, and (if it's yours) edit it. -->
+<div class="modal-backdrop" id="modal-listinfo" style="display:none">
+  <div class="modal modal-lg">
+    <button class="modal-x" data-close="modal-listinfo">✕</button>
+    <h2 id="li-title">List</h2>
+    <p class="modal-sub" id="li-byline"></p>
+    <div class="li-badges" id="li-badges"></div>
+    <p class="li-desc" id="li-desc"></p>
+    <div class="li-stats" id="li-stats"></div>
+    <div class="li-words" id="li-words"></div>
+    <div class="li-actions">
+      <button class="btn btn-small" id="btn-li-use">➕ Use in my room</button>
+      <button class="btn btn-small btn-alt" id="btn-li-download">⬇️ Download .txt</button>
+      <button class="btn btn-small btn-alt" id="btn-li-edit" style="display:none">✏️ Edit</button>
+      <button class="btn btn-small btn-danger" id="btn-li-delete" style="display:none">🗑️ Delete</button>
+    </div>
+
+    <div class="li-edit" id="li-edit" style="display:none">
+      <div class="wl-custom-title">Edit this list</div>
+      <input type="text" id="li-edit-name" class="input" placeholder="List name" maxlength="40" />
+      <textarea id="li-edit-desc" class="input textarea" rows="2" maxlength="300" placeholder="Description"></textarea>
+      <div class="lib-tagpick-row" id="li-edit-tags"></div>
+      <textarea id="li-edit-words" class="input textarea" rows="8" placeholder="One word per line"></textarea>
+      <div class="le-row">
+        <span class="le-count" id="li-edit-count">0 words</span>
+        <button class="btn btn-small btn-alt" id="btn-li-cancel">Cancel</button>
+        <button class="btn btn-small" id="btn-li-save">💾 Save changes</button>
+      </div>
+      <div class="form-error" id="li-edit-error"></div>
     </div>
   </div>
 </div>
@@ -618,12 +726,12 @@ t-shirt</pre>
       <div class="friend-code-row">
         <div>
           <div class="friend-code-label">Your friend code</div>
-          <div class="toggle-hint">Give this to people so they can add you.</div>
+          <div class="toggle-hint">People can add you by your username — this code still works too.</div>
         </div>
         <button class="friend-code" id="friend-code" title="Click to copy">······</button>
       </div>
       <div class="le-row" style="margin-bottom:16px">
-        <input type="text" id="friend-add-code" class="input" placeholder="Friend's code" maxlength="6" style="text-transform:uppercase;letter-spacing:2px" />
+        <input type="text" id="friend-add-code" class="input" placeholder="Their username" maxlength="20" autocomplete="off" />
         <button class="btn btn-small" id="btn-friend-add">Add friend</button>
       </div>
       <div id="friend-requests"></div>
