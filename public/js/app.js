@@ -27,6 +27,9 @@
   let wasArtistThisRound = false;  // survives setArtistMode(false) at round end
   let curWordSource = null, curWordSource2 = null;
   let gameFrames = [];             // one snapshot per finished round, for the GIF
+  // Words we just sent up, kept until the server confirms the list so the
+  // device copy is only written for lists that actually took.
+  const pendingListWords = {};
   let gifJustSaved = false;        // don't bin the frames the instant a new game starts
   let relayHolderId = null;        // in relay mode, the artist holding the pen
   let blindWord = null;            // blind relay: the blanks we draw from
@@ -50,6 +53,7 @@
 
   // Drawing state
   const CANVAS_W = 1000, CANVAS_H = 750;
+  const CANVAS_SCALE = 2;   // backing-store multiplier — see setupCanvas()
   let ctx, pctx;
   let canvasBg = '#ffffff';   // wire value for eraser events (receivers use their own paper)
   let bgStyle = '#ffffff';    // what we actually paint the paper with (colour or CanvasPattern)
@@ -167,9 +171,21 @@
 
   const SIZES = [3, 6, 10, 16, 26, 38];
   // Two rows: a bold tone on top, its lighter sibling underneath.
+  // Three rows: neutrals, then a full hue wheel at a strong value, then the
+  // same hues light. Every hue you would reach for is one click away, and the
+  // light row covers skin, sky and pastel fills that the old palette missed.
   const PALETTE = [
-    '#111111', '#606060', '#e5484d', '#ef6c00', '#f9a825', '#2e7d32', '#00897b', '#0277bd', '#1a237e', '#6a1b9a', '#ad1457', '#5d4037', '#b07b4f', '#ffffff',
-    '#424242', '#bdbdbd', '#ff5252', '#ffab40', '#fff176', '#69f0ae', '#64ffda', '#40c4ff', '#7986cb', '#b388ff', '#ff80ab', '#8d6e63', '#f5cba7', '#fbe9d7',
+    '#000000', '#4a4a4a', '#9e9e9e', '#d6d6d6', '#ffffff',
+    '#7c2d12', '#b45309', '#a16207', '#4d7c0f', '#065f46',
+    '#0e7490', '#1d4ed8', '#4338ca', '#6d28d9', '#a21caf',
+
+    '#dc2626', '#ea580c', '#f59e0b', '#eab308', '#84cc16',
+    '#22c55e', '#10b981', '#14b8a6', '#06b6d4', '#3b82f6',
+    '#6366f1', '#8b5cf6', '#a855f7', '#d946ef', '#ec4899',
+
+    '#fca5a5', '#fdba74', '#fcd34d', '#fde68a', '#bef264',
+    '#86efac', '#6ee7b7', '#5eead4', '#a5f3fc', '#93c5fd',
+    '#c7d2fe', '#ddd6fe', '#e9d5ff', '#f5d0fe', '#fbcfe8',
   ];
   const EMOJIS = ['🎨','🦌','🐱','🐶','🦊','🐻','🐼','🐸','🐙','🦄','🐝','🦖','🐢','🐧','🦉','🐳','🍕','🌵','👻','🤖','👽','🧙','🥷','🦩','🗿','🦆','🐌','🫠','🤡','💀','🐔','🦥','🧌','🥸','🫡','🐊'];
   const COLORS = ['#6C5CE7','#FD79A8','#00CEC9','#FDCB6E','#00B894','#E17055','#0984E3','#B33771','#6D214F','#3B3B98'];
@@ -318,7 +334,12 @@
       sfx('error');
     });
 
-    socket.on('roomCreated', ({ code, state }) => enterRoom(code, state));
+    socket.on('roomCreated', ({ code, state }) => {
+      enterRoom(code, state);
+      // Your last setup follows the browser, so a new room starts the way
+      // you like it rather than at the defaults every time.
+      applyRememberedOptions();
+    });
     socket.on('roomJoined', ({ code, state, resumed }) => {
       enterRoom(code, state, resumed);
       if (resumed) toast('🔌 Welcome back — we kept your seat warm.');
@@ -549,6 +570,21 @@
       if (poll && !had) sfx('pop');
     });
 
+    // Somebody else is typing — show it as a ghost on the preview layer.
+    socket.on('textPreview', ({ x, y, text, color, size }) => {
+      if (!pctx || isArtist) return;
+      pctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
+      if (!text) return;
+      pctx.save();
+      pctx.font = `800 ${Math.round((size || 6) * 3 + 14)}px 'Plus Jakarta Sans', system-ui, sans-serif`;
+      pctx.fillStyle = color || '#111111';
+      pctx.textBaseline = 'middle';
+      pctx.textAlign = 'left';
+      pctx.globalAlpha = 0.45;
+      pctx.fillText(String(text).slice(0, 40), x, y);
+      pctx.restore();
+    });
+
     socket.on('canvasLocked', ({ by }) => {
       setCanvasLocked(true);
       flashLock(by);
@@ -582,7 +618,7 @@
       sfx('close');
     });
 
-    socket.on('correctGuess', ({ playerId, playerName, points, autocorrected, correctedWord, scores }) => {
+    socket.on('correctGuess', ({ playerId, playerName, points, autocorrected, correctedWord, typedWord, scores }) => {
       sfx('correct');
       const wasMe = playerId === myId;
       const alreadyGuessed = guessedSet.has(myId);
@@ -598,9 +634,15 @@
         $('game-chat-input').placeholder = 'Chat with others who guessed…';
       }
       const canSeeWord = autocorrected && correctedWord && (wasMe || isArtist || alreadyGuessed);
+      // The artist knows the word already; what they cannot see is the near
+      // miss that got accepted, so show them that instead.
+      const note = !autocorrected ? ''
+        : (isArtist && typedWord) ? `(autocorrected from "${typedWord}") `
+        : canSeeWord ? `(autocorrected → "${correctedWord}") `
+        : '(autocorrected) ';
       addAnyChat({
         playerId, playerName, correct: true,
-        text: `guessed it! ${autocorrected ? `(autocorrected${canSeeWord ? ` → "${correctedWord}"` : ''}) ` : ''}(+${points})`,
+        text: `guessed it! ${note}(+${points})`,
       });
       if (gameState) {
         gameState.players = gameState.players.map(p => {
@@ -719,9 +761,27 @@
     });
 
     socket.on('customListRenamed', ({ to }) => toast(`✏️ Renamed to "${to}"`));
-    socket.on('customListRemoved', ({ name }) => toast(`🗑️ Removed "${name}"`));
+    socket.on('customListRemoved', ({ name }) => {
+      toast(`🗑️ Removed "${name}"`);
+      uiBusyUntil = 0;                    // let the repaint through immediately
+      refreshGameSettingsPanels();
+      if (gameState && gameState.wordLists) renderWordLists(gameState.wordLists);
+    });
+
+    socket.on('customListRenamed', ({ name, newName }) => {
+      toast(`✏️ "${name}" is now "${newName}"`);
+      uiBusyUntil = 0;
+      refreshGameSettingsPanels();
+      if (gameState && gameState.wordLists) renderWordLists(gameState.wordLists);
+    });
 
     socket.on('customListAdded', ({ name, count }) => {
+      // Keep a copy on this device so it is one click away next time,
+      // whichever account is signed in.
+      if (pendingListWords[name]) {
+        rememberList(name, pendingListWords[name]);
+        delete pendingListWords[name];
+      }
       toast(`✅ Added "${name}" (${count} words)`);
       $('cl-name').value = '';
       $('cl-words').value = '';
@@ -814,9 +874,54 @@
     const byWidth = card.clientWidth - 24;
     const maxW = Math.max(320, Math.min(byHeight, byWidth || byHeight));
     frame.style.setProperty('--canvas-max', maxW + 'px');
+    balanceGameGrid(maxW);
+  }
+
+  // The canvas is locked to 4:3 (the drawing coordinate space is 1000x750),
+  // so on a wide window it runs out of height long before it runs out of
+  // width — which left a dead band either side of it. Rather than stretch
+  // the drawing, hand the leftover to the players list and the chat, which
+  // can always use more room.
+  const SIDE_BASE_PLAYERS = 208;
+  const SIDE_BASE_CHAT = 296;
+  const SIDE_MAX_PLAYERS = 330;
+  const SIDE_MAX_CHAT = 470;
+
+  function balanceGameGrid(canvasW) {
+    const grid = $('game-grid');
+    if (!grid) return;
+    // Narrow layouts stack, and fullscreen has its own rules — leave both be.
+    if (window.innerWidth < 1081 || document.body.classList.contains('focus-mode')) {
+      grid.style.removeProperty('grid-template-columns');
+      return;
+    }
+    const total = grid.clientWidth;
+    if (!total) return;
+    const gap = parseFloat(getComputedStyle(grid).columnGap) || 12;
+    const cardChrome = 24;                       // .canvas-card padding + border
+
+    // What the middle column actually needs. Reserving exactly this keeps
+    // the canvas the same size, so nothing oscillates between fits.
+    const need = Math.min(canvasW + cardChrome, total);
+    const spare = total - gap * 2 - SIDE_BASE_PLAYERS - SIDE_BASE_CHAT - need;
+    if (spare <= 8) {
+      grid.style.removeProperty('grid-template-columns');
+      return;
+    }
+    // Chat earns the larger share — it is the part people actually read.
+    const players = Math.min(SIDE_MAX_PLAYERS, SIDE_BASE_PLAYERS + spare * 0.4);
+    const chat = Math.min(SIDE_MAX_CHAT, SIDE_BASE_CHAT + spare * 0.6);
+    grid.style.gridTemplateColumns =
+      `${Math.round(players)}px minmax(0, 1fr) ${Math.round(chat)}px`;
+  }
+
+  function resetGameGrid() {
+    const grid = $('game-grid');
+    if (grid) grid.style.removeProperty('grid-template-columns');
   }
 
   function leaveToHome(emitLeave = true) {
+    resetGameGrid();
     if (emitLeave && socket && roomCode) socket.emit('leaveRoom');
     roomCode = null;
     gameState = null;
@@ -857,7 +962,18 @@
       guessedSet = new Set(gameState.players.filter(p => p.guessed).map(p => p.id));
       updatePlayers();
       updateRoundPill();
+      refreshGameSettingsPanels();
     }
+  }
+
+  // Mid-game, #words-panel and #options-panel are moved into the settings
+  // modal. updateLobby() is the only thing that repaints them and it does not
+  // run in-game, so they are repainted here instead.
+  function refreshGameSettingsPanels() {
+    if (!settingsMoved || !gameState) return;
+    if (Date.now() > uiBusyUntil) renderWordLists(gameState.wordLists);
+    syncOptions(gameState.options);
+    renderDeviceLists();
   }
 
   // ── Home / public rooms ──
@@ -985,6 +1101,7 @@
       if (Date.now() > uiBusyUntil) renderWordLists(s.wordLists);
       syncOptions(s.options);
       renderMyLists();
+      renderDeviceLists();
       if (s.wordPool) {
         $('avoid-hint').textContent = s.options.avoidRepeats
           ? `${s.wordPool.unused.toLocaleString()} of ${s.wordPool.total.toLocaleString()} words still unused in this room`
@@ -1088,11 +1205,17 @@
           inp.className = 'wl-name-input';
           inp.value = info.name;
           inp.maxLength = 40;
+          let finished = false;
           const finish = (save) => {
+            if (finished) return;           // blur fires again after Enter
+            finished = true;
             const v = inp.value.trim();
-            inp.replaceWith(nameEl);
+            if (inp.parentNode) inp.replaceWith(nameEl);
             uiBusyUntil = 0;
-            if (save && v && v !== info.name) socket.emit('renameCustomList', { name: info.name, newName: v });
+            if (save && v && v !== info.name) {
+              nameEl.textContent = v;       // show it straight away
+              socket.emit('renameCustomList', { name: info.name, newName: v });
+            }
           };
           inp.addEventListener('keydown', (ev) => {
             ev.stopPropagation();
@@ -1110,6 +1233,32 @@
         ex.title = 'Export as .txt';
         ex.onclick = (e) => { e.preventDefault(); socket.emit('exportCustomList', { name: info.name }); };
         actions.appendChild(ex);
+
+        // Straight into your account's lists, without a trip to the library.
+        const keep = el('button', 'wl-keep', '📥');
+        keep.title = 'Save this list to my account';
+        keep.onclick = async (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          if (!window.MiviAccount.isLoggedIn()) {
+            toast('📚 Sign in to keep lists on your account.');
+            return;
+          }
+          keep.disabled = true;
+          try {
+            const words = await roomListWords(info.name);
+            if (!words.length) throw new Error('That list came back empty.');
+            await API.createList(info.name, words);
+            toast(`📥 "${info.name}" saved to your lists`);
+            renderMyLists();
+            window.MiviAccount.refreshLists();
+          } catch (err) {
+            toast('❌ ' + err.message);
+          } finally {
+            keep.disabled = false;
+          }
+        };
+        actions.appendChild(keep);
 
         const rm = el('button', 'wl-remove', '🗑️');
         rm.title = 'Remove this list from the room';
@@ -1307,6 +1456,8 @@
       if (input) input.checked = !!o[key];
     }
     gateComboLock();
+    // Only the host's own view drives what this device remembers.
+    if (gameState && !gameState.managed && gameState.host === myId) rememberOptions(o);
   }
 
   // ── Game screen widgets ──
@@ -1615,12 +1766,14 @@
   function setupCanvas() {
     const canvas = $('canvas');
     ctx = canvas.getContext('2d', { willReadFrequently: true });
-    canvas.width = CANVAS_W;
-    canvas.height = CANVAS_H;
+    canvas.width = CANVAS_W * CANVAS_SCALE;
+    canvas.height = CANVAS_H * CANVAS_SCALE;
+    ctx.setTransform(CANVAS_SCALE, 0, 0, CANVAS_SCALE, 0, 0);
     const preview = $('canvas-preview');
     pctx = preview.getContext('2d');
-    preview.width = CANVAS_W;
-    preview.height = CANVAS_H;
+    preview.width = CANVAS_W * CANVAS_SCALE;
+    preview.height = CANVAS_H * CANVAS_SCALE;
+    pctx.setTransform(CANVAS_SCALE, 0, 0, CANVAS_SCALE, 0, 0);
     clearCanvasLocal();
 
     canvas.addEventListener('contextmenu', (e) => e.preventDefault()); // long-press on phones
@@ -1802,7 +1955,16 @@
     // Match the drawn text exactly, so the input IS the preview.
     input.style.font = `800 ${Math.round(textPx() * r.width / CANVAS_W)}px 'Plus Jakarta Sans', system-ui, sans-serif`;
     // …and mirror it onto the canvas preview layer as they type.
+    let previewTimer = null;
+    const shareTyping = (value) => {
+      clearTimeout(previewTimer);
+      previewTimer = setTimeout(() => {
+        socket.emit('textPreview', { x: p.x, y: p.y, text: value, color: currentColor, size: brushSize });
+      }, 120);
+    };
+    input._shareTyping = shareTyping;
     input.addEventListener('input', () => {
+      shareTyping(input.value);
       pctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
       const v = input.value;
       if (!v) return;
@@ -1835,7 +1997,12 @@
     setTimeout(() => input.focus(), 0);
   }
   function closeTextInput() {
-    if (textInput) { textInput.remove(); textInput = null; }
+    if (textInput) {
+      // Tell everyone the ghost text is gone, or it hangs on their canvas.
+      if (textInput._shareTyping) textInput._shareTyping('');
+      textInput.remove();
+      textInput = null;
+    }
     if (pctx) pctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
   }
 
@@ -1869,7 +2036,7 @@
     }
 
     drawing = true;
-    if (['line', 'rect', 'circle', 'triangle'].includes(currentTool)) {
+    if (['line', 'rect', 'circle', 'triangle', 'arrow'].includes(currentTool)) {
       shape = { x1: p.x, y1: p.y };
       return;
     }
@@ -1964,6 +2131,50 @@
     }
   }
 
+  // A triangle with rounded corners rather than mitred points — a sharp
+  // mitre at a thick brush size is what made the "spike" look ragged.
+  function traceTriangle(c, x1, y1, x2, y2, size) {
+    const cx = (x1 + x2) / 2;
+    const pts = [[cx, y1], [x2, y2], [x1, y2]];
+    const r = Math.min(size * 1.2, Math.abs(x2 - x1) / 4, Math.abs(y2 - y1) / 4);
+    if (!(r > 0.5)) {
+      c.moveTo(cx, y1); c.lineTo(x1, y2); c.lineTo(x2, y2); c.closePath();
+      return;
+    }
+    // arcTo does the corner rounding; start on the first edge's midpoint so
+    // the path closes cleanly.
+    const mid = [(pts[0][0] + pts[2][0]) / 2, (pts[0][1] + pts[2][1]) / 2];
+    c.moveTo(mid[0], mid[1]);
+    for (let i = 0; i < 3; i++) {
+      const a = pts[i];
+      const b = pts[(i + 1) % 3];
+      c.arcTo(a[0], a[1], b[0], b[1], r);
+    }
+    c.closePath();
+  }
+
+  // An arrow: the shaft, plus two barbs scaled to the brush so they stay
+  // readable at any thickness.
+  function traceArrow(c, x1, y1, x2, y2, size) {
+    const dx = x2 - x1, dy = y2 - y1;
+    const len = Math.hypot(dx, dy);
+    if (len < 1) return;
+    const ux = dx / len, uy = dy / len;
+    // Barbs are proportional to the line, but never longer than the line.
+    const head = Math.min(len * 0.42, Math.max(14, size * 3.4));
+    const spread = 0.45;                     // radians off the shaft
+    const cos = Math.cos(spread), sin = Math.sin(spread);
+    // Stop the shaft just short of the tip so the join stays clean.
+    const backX = x2 - ux * head * 0.55;
+    const backY = y2 - uy * head * 0.55;
+    c.moveTo(x1, y1);
+    c.lineTo(backX, backY);
+    c.moveTo(x2, y2);
+    c.lineTo(x2 - (ux * cos - uy * sin) * head, y2 - (uy * cos + ux * sin) * head);
+    c.moveTo(x2, y2);
+    c.lineTo(x2 - (ux * cos + uy * sin) * head, y2 - (uy * cos - ux * sin) * head);
+  }
+
   function drawShapePreview(x1, y1, x2, y2) {
     pctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
     pctx.strokeStyle = currentColor;
@@ -1976,8 +2187,9 @@
     } else if (currentTool === 'rect') {
       pctx.rect(x1, y1, x2 - x1, y2 - y1);
     } else if (currentTool === 'triangle') {
-      const cx = (x1 + x2) / 2;
-      pctx.moveTo(cx, y1); pctx.lineTo(x1, y2); pctx.lineTo(x2, y2); pctx.closePath();
+      traceTriangle(pctx, x1, y1, x2, y2, brushSize);
+    } else if (currentTool === 'arrow') {
+      traceArrow(pctx, x1, y1, x2, y2, brushSize);
     } else if (currentTool === 'circle') {
       const rx = Math.abs(x2 - x1) / 2, ry = Math.abs(y2 - y1) / 2;
       if (rx > 0 && ry > 0) pctx.ellipse((x1 + x2) / 2, (y1 + y2) / 2, rx, ry, 0, 0, Math.PI * 2);
@@ -2032,7 +2244,7 @@
       ctx.textAlign = 'left';
       ctx.fillText(String(d.text || '').slice(0, 40), d.x, d.y);
     } else if (d.type === 'fill') {
-      fillAt(ctx, Math.round(d.x), Math.round(d.y), d.color);
+      fillAt(ctx, Math.round(d.x * CANVAS_SCALE), Math.round(d.y * CANVAS_SCALE), d.color);
     } else if (d.type === 'rect') {
       ctx.beginPath();
       ctx.strokeStyle = d.color; ctx.lineWidth = d.size; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
@@ -2042,14 +2254,21 @@
       if (rx > 0 && ry > 0) {
         ctx.beginPath();
         ctx.ellipse((d.x1 + d.x2) / 2, (d.y1 + d.y2) / 2, rx, ry, 0, 0, Math.PI * 2);
-        ctx.strokeStyle = d.color; ctx.lineWidth = d.size; ctx.lineCap = 'round';
+        ctx.strokeStyle = d.color; ctx.lineWidth = d.size;
+        ctx.lineCap = 'round'; ctx.lineJoin = 'round';
         ctx.stroke();
       }
     } else if (d.type === 'triangle') {
-      const cx = (d.x1 + d.x2) / 2;
       ctx.beginPath();
-      ctx.moveTo(cx, d.y1); ctx.lineTo(d.x1, d.y2); ctx.lineTo(d.x2, d.y2); ctx.closePath();
-      ctx.strokeStyle = d.color; ctx.lineWidth = d.size; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+      traceTriangle(ctx, d.x1, d.y1, d.x2, d.y2, d.size);
+      ctx.strokeStyle = d.color; ctx.lineWidth = d.size;
+      ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+      ctx.stroke();
+    } else if (d.type === 'arrow') {
+      ctx.beginPath();
+      traceArrow(ctx, d.x1, d.y1, d.x2, d.y2, d.size);
+      ctx.strokeStyle = d.color; ctx.lineWidth = d.size;
+      ctx.lineCap = 'round'; ctx.lineJoin = 'round';
       ctx.stroke();
     }
   }
@@ -2181,6 +2400,7 @@
     requestAnimationFrame(fitCanvas);
   }
   function exitFocusMode() {
+    resetGameGrid();
     if (!document.body.classList.contains('focus-mode')) return;
     document.body.classList.remove('focus-mode');
     $('chat-card').classList.remove('open');
@@ -2705,6 +2925,10 @@
   function setCanvasLocked(on) {
     canvasLocked = !!on;
     $('canvas-frame').classList.toggle('locked', canvasLocked);
+    // The flash is a moment; this stays for as long as the canvas is frozen,
+    // so anyone who looked away still knows why nothing is moving.
+    const badge = $('lock-badge');
+    if (badge) badge.style.display = canvasLocked ? 'flex' : 'none';
     // Tools go away for the artist; there is nothing left to do with them.
     if (isArtist) $('toolbar').style.display = canvasLocked ? 'none' : 'flex';
     if (canvasLocked) closeTextInput();
@@ -3192,6 +3416,116 @@
   }
 
 
+  // ══════════ This device remembers your lists and your setup ══════════
+  // Both are kept in localStorage rather than on the account, so they follow
+  // the browser: sign out, switch accounts, play as a guest — the lists you
+  // built and the options you like are still here.
+  const MY_LISTS_KEY = 'mivi_device_lists';
+  const MY_OPTS_KEY = 'mivi_device_options';
+  const MY_LISTS_MAX = 40;
+  const MY_LIST_WORDS_MAX = 3000;
+
+  function deviceLists() {
+    try {
+      const raw = JSON.parse(API.lsGet(MY_LISTS_KEY) || '[]');
+      return Array.isArray(raw) ? raw.filter(l => l && l.name && Array.isArray(l.words)) : [];
+    } catch (e) { return []; }
+  }
+
+  function rememberList(name, words) {
+    if (!name || !Array.isArray(words) || !words.length) return;
+    try {
+      const all = deviceLists().filter(l => l.name.toLowerCase() !== String(name).toLowerCase());
+      all.unshift({ name: String(name).slice(0, 40), words: words.slice(0, MY_LIST_WORDS_MAX), at: Date.now() });
+      API.lsSet(MY_LISTS_KEY, JSON.stringify(all.slice(0, MY_LISTS_MAX)));
+      renderDeviceLists();
+    } catch (e) { /* storage full or blocked — not worth interrupting a game */ }
+  }
+
+  function forgetList(name) {
+    try {
+      const all = deviceLists().filter(l => l.name !== name);
+      API.lsSet(MY_LISTS_KEY, JSON.stringify(all));
+      renderDeviceLists();
+    } catch (e) {}
+  }
+
+  // Options are remembered as a whole and re-applied when you make a room.
+  const REMEMBERED_OPTS = [
+    'rounds', 'roundTime', 'pickTime', 'wordChoices', 'hintCount', 'hintSpeed',
+    'maxPlayers', 'autocorrectStrength', 'strokeLimit',
+    'combinations', 'lockComboParts', 'hidden', 'coopMode', 'relayMode',
+    'mirrorMode', 'oneColorMode', 'suddenDeath', 'wetPaint', 'tileReveal',
+    'randomRoundTime', 'randomWordChoices', 'showWordSource', 'showPunctuation',
+    'avoidRepeats', 'spamProtection', 'textTool', 'sceneBackgrounds', 'lockOnGuess',
+  ];
+
+  function rememberOptions(options) {
+    if (!options) return;
+    try {
+      const keep = {};
+      for (const k of REMEMBERED_OPTS) if (options[k] !== undefined) keep[k] = options[k];
+      API.lsSet(MY_OPTS_KEY, JSON.stringify(keep));
+    } catch (e) {}
+  }
+
+  function rememberedOptions() {
+    try {
+      const o = JSON.parse(API.lsGet(MY_OPTS_KEY) || 'null');
+      return (o && typeof o === 'object') ? o : null;
+    } catch (e) { return null; }
+  }
+
+  // Push the remembered setup at a room we have just made.
+  function applyRememberedOptions() {
+    const o = rememberedOptions();
+    if (!o || !gameState || gameState.managed || gameState.host !== myId) return;
+    socket.emit('setGameOptions', { options: o });
+  }
+
+  // The strip of lists this browser has collected. One click puts one back
+  // in the room; the × forgets it.
+  function renderDeviceLists() {
+    const box = $('wl-saved');
+    const row = $('wl-saved-row');
+    if (!box || !row) return;
+    const mine = deviceLists();
+    const canAdd = !!(gameState && !gameState.managed && gameState.host === myId);
+    box.style.display = (mine.length && canAdd) ? 'block' : 'none';
+    if (!mine.length || !canAdd) return;
+
+    row.textContent = '';
+    const inRoom = new Set(
+      ((gameState.wordLists && gameState.wordLists.available) || [])
+        .map(l => String(l.name).toLowerCase()),
+    );
+
+    for (const l of mine) {
+      const chip = el('div', 'saved-chip' + (inRoom.has(l.name.toLowerCase()) ? ' in-room' : ''));
+      const use = el('button', 'saved-use');
+      use.appendChild(el('span', 'saved-name', l.name));
+      use.appendChild(el('span', 'saved-count', l.words.length + ''));
+      use.title = inRoom.has(l.name.toLowerCase())
+        ? l.name + ' is already in this room'
+        : 'Add ' + l.name + ' to this room';
+      use.disabled = inRoom.has(l.name.toLowerCase());
+      use.onclick = () => {
+        socket.emit('addCustomList', { name: l.name, text: l.words.join('\n') });
+        sfx('click');
+      };
+      chip.appendChild(use);
+
+      const drop = el('button', 'saved-drop', '✕');
+      drop.title = 'Forget ' + l.name + ' on this device';
+      drop.onclick = async () => {
+        if (!await MiviDialog.confirm(`Forget "${l.name}" on this device? It stays in any room that already has it.`, { confirmLabel: 'Forget', danger: true })) return;
+        forgetList(l.name);
+      };
+      chip.appendChild(drop);
+      row.appendChild(chip);
+    }
+  }
+
   // ══════════ Word-list cache ══════════
   // The room's catalogue is re-sent on every state update. Remembering the
   // last one per room means a reconnect (or a refresh) paints the lists
@@ -3244,12 +3578,12 @@
   async function generateAiList() {
     const key = $('ai-key').value.trim();
     const topic = $('ai-topic').value.trim();
-    if (!key) return aiStatus('bad', 'Paste an OpenAI API key first.');
+    if (!key) return aiStatus('bad', 'Paste a Gemini API key first — aistudio.google.com/apikey.');
     if (!topic) return aiStatus('bad', 'What should the list be about?');
 
     // Only ever kept if they asked for it.
-    if ($('ai-remember').checked) API.lsSet('mivi_openai_key', key);
-    else API.lsDel('mivi_openai_key');
+    if ($('ai-remember').checked) API.lsSet('mivi_gemini_key', key);
+    else API.lsDel('mivi_gemini_key');
 
     const btn = $('btn-ai-generate');
     btn.disabled = true;
@@ -3273,24 +3607,26 @@
   // updateLobby() runs on every state update, so the answer is cached per
   // signed-in account rather than asking the server each time.
   let modCheck = { for: undefined, isMod: false };
+
+  // Resolves to true/false and remembers the answer per signed-in account.
+  async function amModerator() {
+    const acct = window.MiviAccount;
+    const who = acct.isLoggedIn() ? acct.user().id : null;
+    if (!who) { modCheck = { for: null, isMod: false }; return false; }
+    if (modCheck.for === who) return modCheck.isMod;
+    modCheck = { for: who, isMod: false };   // assume no until told otherwise
+    try {
+      const me = await API.modMe();
+      if (modCheck.for !== who) return false;   // they signed out mid-flight
+      modCheck.isMod = !!me.isMod;
+    } catch (e) { /* not a moderator, or offline */ }
+    return modCheck.isMod;
+  }
+
   async function syncAiPanel() {
     const box = $('wl-ai');
     if (!box) return;
-    const acct = window.MiviAccount;
-    const who = acct.isLoggedIn() ? acct.user().id : null;
-    if (!who) { modCheck = { for: null, isMod: false }; box.style.display = 'none'; return; }
-    if (modCheck.for === who) {
-      box.style.display = modCheck.isMod ? 'flex' : 'none';
-      return;
-    }
-    modCheck = { for: who, isMod: false };   // assume no until told otherwise
-    box.style.display = 'none';
-    try {
-      const me = await API.modMe();
-      if (modCheck.for !== who) return;      // they signed out mid-flight
-      modCheck.isMod = !!me.isMod;
-      box.style.display = me.isMod ? 'flex' : 'none';
-    } catch (e) { /* not a moderator, or offline — stays hidden */ }
+    box.style.display = (await amModerator()) ? 'flex' : 'none';
   }
 
   // Offer last game's GIF in the lobby, so ending a game early (or just
@@ -3415,6 +3751,194 @@
   function canEditRoomLists() {
     const s = gameState;
     return !!(s && !s.managed && s.host === myId);
+  }
+
+
+  // A list somebody sent us by link. Show what is in it and offer to keep it.
+  async function openSharedList(token) {
+    let list;
+    try {
+      list = (await API.sharedList(token)).list;
+    } catch (e) {
+      toast('❌ ' + e.message);
+      return;
+    }
+    const preview = list.words.slice(0, 10).join(', ');
+    const keep = await MiviDialog.confirm(
+      `${list.author} shared "${list.name}" — ${list.count} words.\n\n${preview}${list.count > 10 ? '…' : ''}`,
+      { title: '🔗 A word list for you', confirmLabel: 'Save to my lists' },
+    );
+    if (!keep) return;
+    if (!window.MiviAccount.isLoggedIn()) {
+      // Nothing to save it to yet — hold it until they sign in.
+      rememberList(list.name, list.words);
+      toast('💾 Kept on this device — sign in to save it to your account.');
+      return;
+    }
+    try {
+      await API.createList(list.name, list.words);
+      rememberList(list.name, list.words);
+      toast(`📥 "${list.name}" is in your lists now`);
+      window.MiviAccount.refreshLists();
+    } catch (e) {
+      toast('❌ ' + e.message);
+    }
+  }
+
+  // ══════════ Moderator statistics ══════════
+  // Charts are plain divs — a charting library would be the first real
+  // dependency this project has, for four bar charts.
+  let statsRange = '24h';
+  let statsData = null;
+
+  function statTile(label, value, hint) {
+    const t = el('div', 'stat-tile');
+    t.appendChild(el('div', 'stat-value', String(value)));
+    t.appendChild(el('div', 'stat-label', label));
+    if (hint) t.appendChild(el('div', 'stat-hint', hint));
+    return t;
+  }
+
+  // Bars, scaled to the tallest value, with the time axis under them.
+  function renderBars(host, points, opts = {}) {
+    host.textContent = '';
+    if (!points || !points.length) {
+      host.appendChild(el('p', 'gallery-empty', opts.empty || 'Nothing recorded yet — check back once people have played.'));
+      return;
+    }
+    const valueOf = opts.value || (p => p.peak);
+    const max = Math.max(1, ...points.map(valueOf));
+    const bars = el('div', 'bars');
+    for (const p of points) {
+      const v = valueOf(p);
+      const col = el('div', 'bar-col');
+      const bar = el('div', 'bar');
+      bar.style.height = Math.max(2, (v / max) * 100) + '%';
+      if (v === 0) bar.classList.add('zero');
+      bar.title = `${opts.label || 'Peak'}: ${v}  ·  ${opts.fmt ? opts.fmt(p.t) : new Date(p.t).toLocaleString()}`;
+      col.appendChild(bar);
+      bars.appendChild(col);
+    }
+    host.appendChild(bars);
+
+    // A handful of labels along the bottom — more than about six is mush.
+    const axis = el('div', 'bar-axis');
+    const step = Math.max(1, Math.ceil(points.length / 6));
+    for (let i = 0; i < points.length; i += step) {
+      axis.appendChild(el('span', null, opts.fmt ? opts.fmt(points[i].t) : ''));
+    }
+    host.appendChild(axis);
+
+    const scale = el('div', 'bar-scale');
+    scale.appendChild(el('span', null, '0'));
+    scale.appendChild(el('span', null, String(max)));
+    host.appendChild(scale);
+  }
+
+  const fmtHour = (t) => new Date(t).toLocaleTimeString([], { hour: 'numeric' });
+  const fmtDay = (t) => new Date(t).toLocaleDateString([], { month: 'short', day: 'numeric' });
+  const fmtMonth = (t) => new Date(t).toLocaleDateString([], { month: 'short' });
+
+  function showStatTab(name) {
+    document.querySelectorAll('#stats-tabs .tab').forEach(t => t.classList.toggle('active', t.dataset.stab === name));
+    document.querySelectorAll('#modal-stats .tab-pane').forEach(p => p.classList.toggle('active', p.id === 'stab-' + name));
+  }
+
+  async function openStats() {
+    $('modal-stats').style.display = 'flex';
+    showStatTab('players');
+    await loadStats();
+  }
+
+  async function loadStats() {
+    try {
+      statsData = await API.modStats(statsRange);
+    } catch (e) {
+      toast('❌ ' + e.message);
+      return;
+    }
+    renderStats();
+  }
+
+  function renderStats() {
+    const d = statsData;
+    if (!d) return;
+
+    // ── players ──
+    const live = d.live || {};
+    const tiles = $('stat-tiles-players');
+    tiles.textContent = '';
+    tiles.appendChild(statTile('Playing right now', live.players || 0, (live.rooms || 0) + ' rooms'));
+    tiles.appendChild(statTile('Peak', d.players.peak, 'at once, this range'));
+    tiles.appendChild(statTile('Average', d.players.avg, 'concurrent'));
+    tiles.appendChild(statTile('Samples', d.players.samples, 'one a minute'));
+
+    const fmt = statsRange === '24h' ? fmtHour : (statsRange === '1y' ? fmtMonth : fmtDay);
+    renderBars($('stat-chart-players'), d.players.points, {
+      value: p => p.peak, label: 'Peak', fmt,
+      empty: 'No readings for this range yet. The server takes one a minute, so a fresh install starts empty.',
+    });
+    $('stat-players-note').textContent =
+      `${d.players.label} — each bar is the highest number of people playing at once in that period.`;
+
+    // ── accounts ──
+    const at = $('stat-tiles-accounts');
+    at.textContent = '';
+    at.appendChild(statTile('Accounts', d.totals.accounts, 'all time'));
+    at.appendChild(statTile('Today', d.totals.accountsToday, 'new'));
+    at.appendChild(statTile('This week', d.totals.accounts7d, 'new'));
+    at.appendChild(statTile('Per day', d.accounts.perDay, 'average'));
+    renderBars($('stat-chart-accounts'), d.accounts.points, {
+      value: p => p.count, label: 'New accounts', fmt: fmtDay,
+      empty: 'No accounts created in this range.',
+    });
+
+    // ── moderation ──
+    const mt = $('stat-tiles-mods');
+    mt.textContent = '';
+    mt.appendChild(statTile('Moderators', d.moderation.moderators.length, d.moderation.anyMods ? '' : 'using the ' + d.moderation.bootstrapName + ' fallback'));
+    mt.appendChild(statTile('Banned', d.moderation.banned.length, 'from sharing'));
+    mt.appendChild(statTile('Shared lists', d.totals.librarySharedLists, d.totals.libraryWords.toLocaleString() + ' words'));
+    mt.appendChild(statTile('Downloads', d.totals.libraryDownloads, 'from the library'));
+    mt.appendChild(statTile('Personal lists', d.totals.privateLists, 'across all accounts'));
+    mt.appendChild(statTile('Drawings kept', d.totals.drawingsSaved, 'in galleries'));
+
+    const fill = (host, rows, render) => {
+      host.textContent = '';
+      if (!rows.length) { host.appendChild(el('p', 'gallery-empty', 'Nothing here.')); return; }
+      for (const r of rows) host.appendChild(render(r));
+    };
+    fill($('stat-mods'), d.moderation.moderators, (m) => {
+      const row = el('div', 'stat-row');
+      row.appendChild(el('span', 'stat-row-name', m.username));
+      row.appendChild(el('span', 'stat-row-meta', m.since ? new Date(m.since).toLocaleDateString() : ''));
+      return row;
+    });
+    fill($('stat-banned'), d.moderation.banned, (b) => {
+      const row = el('div', 'stat-row');
+      row.appendChild(el('span', 'stat-row-name', b.username));
+      row.appendChild(el('span', 'stat-row-meta', b.reason || 'no reason given'));
+      return row;
+    });
+    fill($('stat-recent'), d.recentShares, (l) => {
+      const row = el('div', 'stat-row');
+      row.appendChild(el('span', 'stat-row-name', l.name));
+      row.appendChild(el('span', 'stat-row-meta', `${l.author} · ${l.count} words`));
+      return row;
+    });
+    fill($('stat-top'), d.topShares, (l) => {
+      const row = el('div', 'stat-row');
+      row.appendChild(el('span', 'stat-row-name', l.name));
+      row.appendChild(el('span', 'stat-row-meta', l.downloads + ' downloads'));
+      return row;
+    });
+  }
+
+  // The whole group only exists for moderators.
+  async function syncStatsPanel() {
+    const group = $('set-stats-group');
+    if (!group) return;
+    group.style.display = (await amModerator()) ? 'block' : 'none';
   }
 
   // ══════════ Public-match voting ══════════
@@ -3975,6 +4499,40 @@
     }
   }
 
+  // Same splitting rule the server uses, so what we cache matches what the
+  // room actually got.
+  function parseWordText(text) {
+    const seen = new Set();
+    const out = [];
+    for (const raw of String(text || '').split(/[\r\n,]+/)) {
+      const w = raw.replace(/\s+/g, ' ').trim().slice(0, 64);
+      if (!w) continue;
+      const k = w.toLowerCase();
+      if (seen.has(k)) continue;
+      seen.add(k);
+      out.push(w);
+    }
+    return out;
+  }
+
+  // The words behind a room list, fetched once and cached for the round.
+  const roomListCache = {};
+  function roomListWords(name) {
+    if (roomListCache[name]) return Promise.resolve(roomListCache[name]);
+    return new Promise((resolve, reject) => {
+      const t = setTimeout(() => { socket.off('customListWords', on); reject(new Error('The server did not answer.')); }, 6000);
+      const on = (payload) => {
+        if (!payload || payload.name !== name) return;
+        clearTimeout(t);
+        socket.off('customListWords', on);
+        roomListCache[name] = payload.words || [];
+        resolve(roomListCache[name]);
+      };
+      socket.on('customListWords', on);
+      socket.emit('getCustomList', { name });
+    });
+  }
+
   function libWords() {
     return $('lib-words').value.split(/[\n,]+/).map(w => w.trim()).filter(Boolean);
   }
@@ -4058,8 +4616,15 @@
     renderAvatarBubble();
     syncAudioUI();
 
-    // Invite link?
+    // Somebody shared a word list with us?
     const params = new URLSearchParams(location.search);
+    const sharedToken = params.get('list');
+    if (sharedToken) {
+      history.replaceState(null, '', location.pathname);
+      openSharedList(sharedToken);
+    }
+
+    // Invite link?
     if (params.get('join')) {
       pendingJoin = params.get('join').toUpperCase();
       $('home-code').value = pendingJoin;
@@ -4154,7 +4719,10 @@
       const text = $('cl-words').value.trim();
       if (!name) { toast('Name the list first.'); return; }
       if (!text) { toast('It needs some words first.'); return; }
+      pendingListWords[name] = parseWordText(text);
       socket.emit('addCustomList', { name, text });
+      $('cl-name').value = '';
+      $('cl-words').value = '';
     });
     $('btn-import-list').addEventListener('click', () => $('import-file').click());
     $('import-file').addEventListener('change', (e) => {
@@ -4164,6 +4732,7 @@
           const text = String(ev.target.result || '').trim();
           const name = file.name.replace(/\.txt$/i, '');
           if (!text) { toast(`"${name}" is empty — skipped.`); return; }
+          pendingListWords[name] = parseWordText(text);
           socket.emit('addCustomList', { name, text });
         };
         reader.readAsText(file);
@@ -4259,7 +4828,11 @@
       if (!st.musicEnabled) Audio.startMusic();
       syncAudioUI();
     });
-    $('btn-settings').addEventListener('click', () => { syncAudioUI(); $('modal-settings').style.display = 'flex'; });
+    $('btn-settings').addEventListener('click', () => {
+      syncAudioUI();
+      syncStatsPanel();
+      $('modal-settings').style.display = 'flex';
+    });
     $('set-music-on').addEventListener('change', e => { Audio.init(); Audio.setMusicEnabled(e.target.checked); if (e.target.checked) Audio.startMusic(); syncAudioUI(); });
     $('set-sfx-on').addEventListener('change', e => { Audio.setSfxEnabled(e.target.checked); });
     $('set-music-vol').addEventListener('input', e => {
@@ -4488,10 +5061,10 @@
       }
     });
 
-    // ── Generate a list with OpenAI (moderators) ──
+    // ── Generate a list with Gemini (moderators) ──
     $('btn-ai-generate').addEventListener('click', generateAiList);
-    $('ai-key').value = API.lsGet('mivi_openai_key') || '';
-    $('ai-remember').checked = !!API.lsGet('mivi_openai_key');
+    $('ai-key').value = API.lsGet('mivi_gemini_key') || '';
+    $('ai-remember').checked = !!API.lsGet('mivi_gemini_key');
 
     $('btn-endgame').addEventListener('click', async () => {
       if (!await MiviDialog.confirm('End the game now and jump to the final scores?', { title: 'End the game', confirmLabel: 'End it', danger: true })) return;
@@ -4520,6 +5093,17 @@
     $('btn-lobby-friends').addEventListener('click', () => window.MiviAccount.openAccount('friends'));
     $('invite-join').addEventListener('click', acceptInvite);
     $('invite-dismiss').addEventListener('click', hideInviteToast);
+
+    // ── statistics (moderators) ──
+    $('btn-open-stats').addEventListener('click', openStats);
+    document.querySelectorAll('#stats-tabs .tab').forEach(t =>
+      t.addEventListener('click', () => showStatTab(t.dataset.stab)));
+    document.querySelectorAll('#stat-ranges [data-range]').forEach(b =>
+      b.addEventListener('click', () => {
+        statsRange = b.dataset.range;
+        document.querySelectorAll('#stat-ranges [data-range]').forEach(x => x.classList.toggle('on', x === b));
+        loadStats();
+      }));
 
     wireBackButton();
     wireClickToType();

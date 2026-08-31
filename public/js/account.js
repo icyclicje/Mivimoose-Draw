@@ -241,9 +241,17 @@
       return;
     }
     for (const list of cachedLists) {
+      const wrap = el('div', 'list-entry');
       const row = el('div', 'list-row');
       row.appendChild(el('span', 'ln', list.name));
       row.appendChild(el('span', 'lc', list.count + ' words'));
+      // Personal lists are private unless you hand out a link.
+      row.appendChild(el('span', 'private-tag' + (list.shared ? ' shared' : ''),
+        list.shared ? 'LINK ON' : 'PRIVATE'));
+
+      const shareBtn = el('button', null, list.shared ? '🔗' : '🔒');
+      shareBtn.title = list.shared ? 'Sharing is on — click to manage' : 'Only you can see this. Click to make a link.';
+      shareBtn.onclick = () => toggleShare(list, wrap);
 
       const editBtn = el('button', null, '✏️');
       editBtn.title = 'Edit';
@@ -258,11 +266,65 @@
         try { await API.deleteList(list.id); toast('List deleted.'); refreshLists(); }
         catch (e) { toast('❌ ' + e.message); }
       };
+      row.appendChild(shareBtn);
       row.appendChild(editBtn);
       row.appendChild(exportBtn);
       row.appendChild(delBtn);
-      rows.appendChild(row);
+      wrap.appendChild(row);
+      if (list.shared && list.shareUrl) wrap.appendChild(shareRow(list));
+      rows.appendChild(wrap);
     }
+  }
+
+  // The link, with a copy button and a way to switch it back off.
+  function shareRow(list) {
+    const box = el('div', 'list-share-row');
+    const pill = el('span', 'share-pill');
+    const code = el('code', null, list.shareUrl);
+    pill.appendChild(code);
+    const copy = el('button', 'mini-btn', '📋 Copy');
+    copy.onclick = async () => {
+      try {
+        await navigator.clipboard.writeText(list.shareUrl);
+        toast('🔗 Link copied — anyone with it can grab this list.');
+      } catch (e) {
+        // Clipboard is blocked in some embeds; selecting it is the fallback.
+        const r = document.createRange();
+        r.selectNodeContents(code);
+        const sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(r);
+        toast('Select and copy the link.');
+      }
+    };
+    pill.appendChild(copy);
+    box.appendChild(pill);
+
+    const off = el('button', 'mini-btn', '🔒 Stop sharing');
+    off.onclick = async () => {
+      try {
+        await API.shareList(list.id, false);
+        toast('🔒 That link no longer works.');
+        refreshLists();
+      } catch (e) { toast('❌ ' + e.message); }
+    };
+    box.appendChild(off);
+    return box;
+  }
+
+  async function toggleShare(list) {
+    if (list.shared) {
+      // Already on — scroll the link into view rather than toggling it off
+      // by accident. The explicit button below does that.
+      toast('🔗 The link is under the list.');
+      return;
+    }
+    try {
+      const res = await API.shareList(list.id, true);
+      toast('🔗 Link created — anyone with it can grab this list.');
+      try { await navigator.clipboard.writeText(res.url); toast('📋 Copied to your clipboard.'); } catch (e) {}
+      refreshLists();
+    } catch (e) { toast('❌ ' + e.message); }
   }
 
   async function exportList(id, name) {

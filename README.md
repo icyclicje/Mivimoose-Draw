@@ -9,7 +9,7 @@ npm install
 npm start          # → http://localhost:3000
 ```
 
-Dev auto-reload: `npm run dev`. End-to-end smoke test (~85 checks, runs against its own temp data dir): `npm run smoke`.
+Dev auto-reload: `npm run dev`. End-to-end smoke test (285 checks, runs against its own temp data dir): `npm run smoke`.
 
 Player data (accounts, lists, gallery PNGs, the shared library, friends) lives in `data/` — delete the folder to reset everything.
 
@@ -37,6 +37,18 @@ Environment variables work too and win over the file: `DISCORD_CLIENT_ID`, `DISC
 > **[docs/DISCORD_LOGIN.md](docs/DISCORD_LOGIN.md)** covers every way the two
 > strings drift apart — trailing slashes, `127.0.0.1` vs `localhost`, a changed
 > port, the wrong application — and how to check what the server really sends.
+
+## Brand assets
+
+Logo (SVG + PNG), Discord app icon, activity cover and background art live in
+`public/brand/`, and the copy for the Discord portal is in
+**[docs/BRAND.md](docs/BRAND.md)**. Regenerate the artwork any time — it is
+rendered from the logo geometry itself, with no dependencies:
+
+```bash
+node tools/make-logo.js
+node tools/make-brand.js
+```
 
 ## Run it as a Discord Activity
 
@@ -87,11 +99,10 @@ Three things to set on the Railway service:
 
 - **Play online** — drops you straight into a public game that's already going (or starts one if nobody's playing). Classic word list, rounds auto-start.
 - **Private rooms** — 4-letter codes, invite links (`/?join=CODE`), public listing toggle, kick, host migration.
-- **Friends** — every account has a 6-character friend code. Add people by code, or hit ＋ next to anyone you're playing with (public or private). Friends show online status and can be invited straight into your room — they get a pop-up with a Join button.
+- **Friends** — usernames are unique, so you add people by name (the old 6-character code still works if someone has one saved). Or hit ＋ next to anyone you're playing with. Friends show online status and can be invited straight into your room — they get a pop-up with a Join button.
 - **Word lists** — ships with the 1,300+ word Classic list; drop more `.txt` files into `words/` if you want. Hosts can add lists on the fly, attach lists saved on their account, weight lists 1–10, and check **ℹ️ Odds** to see the exact chance of each list showing up.
 - **List library** — share a list with everyone, or drop in a whole **folder** of `.txt` files and each one becomes its own list. Browse what others shared, download as `.txt`, save to your account, or pull one straight into the room you're hosting. Rename or take down your own uploads any time. Sharing needs an account, and swear protection runs on every upload.
 - **Room lists** — anything you add to a room can be renamed or removed on the spot; removing the last one falls back to Classic rather than leaving the room with nothing to draw. The host can also grab **every list in the room as a single .zip** ("Download all"), with the ones currently in play first and unused ones prefixed so you can tell them apart.
-- **Canvas paper** — plain, graph grid, dot grid or lined. The eraser puts the pattern back instead of painting over it, and the paper shows up in downloads and the GIF.
 - **Scene backdrops** — switch this on as host and whoever's drawing gets a 🖼️ button with 22 ready-made scenes to draw over: city, city at night, beach, forest, mountains, space, desert, underwater, farm, open road, snow, sunset, rain, castle, race track, football pitch, classroom, kitchen, stage, meadow, clouds and a lined page. They're drawn in code (nothing to download), identical for everyone, and the eraser restores the scene rather than smearing over it.
 - **Save the game as a GIF** — at the final scoreboard, one button turns every drawing from that game into an animated GIF, each frame captioned with the word, the artist and the Mivimoose mark. Encoded right in the browser.
 - **Accounts** — pick your display name, unlimited saved lists (import/export), a gallery of your drawings (auto-save optional), stats, friends.
@@ -118,7 +129,7 @@ server.js            entry — express + socket.io + security headers + gzip
 lib/
   game.js            rooms, matchmaking, game loop, spam protection, presence
   similarity.js      the autocorrect engine
-  friends.js         friend codes, requests, friends list
+  friends.js         friends list, requests, lookup by username
   words.js           word lists + weighted picking
   api.js             REST: Discord auth, lists, gallery, library, friends, rooms
   auth.js            account records & session tokens

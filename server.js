@@ -20,6 +20,8 @@ const FRAME_ANCESTORS = config.activityEnabled
   ? "frame-ancestors https://discord.com https://*.discord.com https://*.discordsays.com"
   : "frame-ancestors 'none'";
 
+const stats = require('./lib/stats');
+
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
@@ -80,6 +82,13 @@ app.get('/', (req, res) => {
 game.init(io);
 
 const PORT = process.env.PORT || 3000;
+// One reading a minute is plenty of resolution for an hourly bucket, and
+// keeps the JSON store from being rewritten constantly.
+const STATS_EVERY_MS = 60 * 1000;
+setInterval(() => {
+  try { stats.sample(game.totals()); } catch (e) { /* never take the server down for a metric */ }
+}, STATS_EVERY_MS).unref();
+
 server.listen(PORT, () => {
   console.log(`🎨 Mivimoose Draw running on http://localhost:${PORT}`);
   if (config.activityEnabled) console.log('🎮 Discord Activity support is on — see docs/DISCORD_ACTIVITY.md');

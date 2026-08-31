@@ -172,6 +172,10 @@
     modBan: (userId, reason) => req('POST', '/mod/ban', { userId, reason }),
     modUnban: (userId) => req('POST', '/mod/unban', { userId }),
     modGenerateList: (payload) => req('POST', '/mod/generate-list', payload),
+    modStats: (range) => req('GET', '/mod/stats' + (range ? '?range=' + encodeURIComponent(range) : '')),
+
+    shareList: (id, shared) => req('POST', '/lists/' + id + '/share', { shared }),
+    sharedList: (token) => req('GET', '/share/' + encodeURIComponent(token)),
 
     importZip: (zip) => req('POST', '/lists/import-zip', { zip }),
 

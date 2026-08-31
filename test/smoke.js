@@ -145,9 +145,12 @@ async function main() {
     check('only the Classic list ships', created.state.wordLists.available.filter(l => !l.custom).length === 1 && created.state.wordLists.available[0].label === 'Classic');
     const dflt = created.state.options;
     check('new defaults (10 rounds · 90s · 5 words · 5 hints · 10 players · easy)',
-      dflt.rounds === 10 && dflt.roundTime === 90 && dflt.wordChoices === 5 && dflt.hintCount === 5 && dflt.maxPlayers === 10 && dflt.autocorrectStrength === 1 && dflt.textTool === false && dflt.avoidRepeats === true && dflt.sceneBackgrounds === false,
+      dflt.rounds === 10 && dflt.roundTime === 90 && dflt.wordChoices === 5 && dflt.hintCount === 5 && dflt.maxPlayers === 10 && dflt.autocorrectStrength === 1 && dflt.avoidRepeats === true,
       JSON.stringify(dflt));
     check('word-pick time defaults to 20s', dflt.pickTime === 20, String(dflt.pickTime));
+    check('text/emoji tools and backdrops are on by default',
+      dflt.textTool === true && dflt.sceneBackgrounds === true,
+      JSON.stringify({ t: dflt.textTool, s: dflt.sceneBackgrounds }));
     check('custom modes default off',
       dflt.mirrorMode === false && dflt.oneColorMode === false && dflt.suddenDeath === false && dflt.strokeLimit === 0,
       JSON.stringify({ m: dflt.mirrorMode, o: dflt.oneColorMode, s: dflt.suddenDeath, l: dflt.strokeLimit }));
@@ -1768,6 +1771,119 @@ async function main() {
       await sleep(200);
     }
 
+
+    console.log('— draw event validation —');
+    {
+      const VH = connect({ guestKey: 'da' + Date.now().toString(16).padStart(14, '0') });
+      await once(VH, 'welcome');
+      let rp = once(VH, 'roomCreated');
+      VH.emit('createRoom', { name: 'ValHost', avatar: '🎨' });
+      const vCode = (await rp).code;
+      const VG = connect({ guestKey: 'db' + Date.now().toString(16).padStart(14, '0') });
+      await once(VG, 'welcome');
+      rp = once(VG, 'roomJoined');
+      VG.emit('joinRoom', { code: vCode, name: 'ValGuess', avatar: '🐱' });
+      await rp;
+
+      let up = once(VH, 'stateUpdate');
+      VH.emit('addCustomList', { name: 'Val', text: 'rocket' });
+      await up;
+      up = once(VH, 'stateUpdate');
+      VH.emit('setWordLists', { lists: ['Val'], weights: { Val: 1 } });
+      await up;
+      up = once(VH, 'stateUpdate');
+      VH.emit('setGameOptions', { options: { roundTime: 90, hintCount: 0, wordChoices: 0 } });
+      await up;
+
+      await (async () => { const p2 = once(VG, 'drawingStart', 12000); VH.emit('startGame'); return p2; })();
+
+      // The arrow is a real shape now.
+      const arrow = once(VG, 'draw', 5000);
+      VH.emit('draw', { type: 'arrow', x1: 100, y1: 100, x2: 300, y2: 200, color: '#112233', size: 8 });
+      const a = await arrow;
+      check('arrow shapes are relayed', a.type === 'arrow' && a.x2 === 300, JSON.stringify(a));
+
+      // Junk fields are stripped rather than relayed.
+      const clean = once(VG, 'draw', 5000);
+      VH.emit('draw', { type: 'line', x1: 10, y1: 10, x2: 20, y2: 20, color: 'javascript:evil', size: 9999, evil: 'x' });
+      const c = await clean;
+      check('a bad colour falls back', /^#[0-9a-f]{6}$/i.test(c.color), String(c.color));
+      check('size is clamped', c.size <= 80, String(c.size));
+      check('unknown fields are dropped', c.evil === undefined, JSON.stringify(Object.keys(c)));
+
+      // Coordinates cannot run miles off canvas.
+      const far = once(VG, 'draw', 5000);
+      VH.emit('draw', { type: 'line', x1: -99999, y1: 99999, x2: 5, y2: 5, color: '#000000', size: 4 });
+      const f = await far;
+      check('coordinates are clamped', f.x1 >= -200 && f.y1 <= 950, JSON.stringify({ x1: f.x1, y1: f.y1 }));
+
+      // An unknown shape reaches nobody.
+      let leaked = false;
+      const spy = () => { leaked = true; };
+      VG.on('draw', spy);
+      VH.emit('draw', { type: 'nonsense', x1: 1, y1: 1, x2: 2, y2: 2 });
+      await sleep(350);
+      VG.off('draw', spy);
+      check('unknown shapes are dropped', !leaked);
+
+      VH.disconnect(); VG.disconnect();
+      await sleep(200);
+    }
+
+    console.log('— moderator statistics —');
+    {
+      const tokenN = (await rest('POST', '/auth/test-login', { username: 'plain' + Math.floor(Math.random() * 1e6) })).data.token;
+      let r = await rest('GET', '/mod/stats', undefined, tokenN);
+      check('statistics are moderators-only', r.status === 403, JSON.stringify(r.data));
+      r = await rest('GET', '/mod/stats');
+      check('statistics need a sign-in', r.status === 401);
+
+      const tokenM = (await rest('POST', '/auth/test-login', { username: 'Silk' })).data.token;
+      r = await rest('GET', '/mod/stats?range=7d', undefined, tokenM);
+      check('a moderator gets statistics', r.status === 200 && !!r.data.players && !!r.data.totals, JSON.stringify(r.data).slice(0, 120));
+      check('the requested range comes back', r.data.players.range === '7d', String(r.data.players.range));
+      check('accounts-per-day series is present', Array.isArray(r.data.accounts.points) && r.data.accounts.points.length > 0);
+      check('account totals are counted', typeof r.data.totals.accounts === 'number' && r.data.totals.accounts > 0, String(r.data.totals.accounts));
+      check('moderation summary is present', Array.isArray(r.data.moderation.moderators) && Array.isArray(r.data.moderation.banned));
+      check('library figures are present', typeof r.data.totals.librarySharedLists === 'number');
+
+      r = await rest('GET', '/mod/stats?range=nonsense', undefined, tokenM);
+      check('a bogus range falls back to 24h', r.data.players.range === '24h', String(r.data.players.range));
+    }
+
+    console.log('— private lists & share links —');
+    {
+      const tokenS = (await rest('POST', '/auth/test-login', { username: 'sharer' + Math.floor(Math.random() * 1e6) })).data.token;
+      let r = await rest('POST', '/lists', { name: 'Secret things', words: ['ghost', 'attic'] }, tokenS);
+      check('a personal list is created', r.status === 200, JSON.stringify(r.data));
+      const listId = r.data.list.id;
+      check('personal lists are private by default', r.data.list.shared === false, JSON.stringify(r.data.list));
+
+      r = await rest('POST', '/lists/' + listId + '/share', { shared: true }, tokenS);
+      check('sharing can be switched on', r.status === 200 && r.data.shared === true && !!r.data.token, JSON.stringify(r.data));
+      const shareToken = r.data.token;
+      check('the share url points at the site', String(r.data.url || '').indexOf('/?list=') !== -1, String(r.data.url));
+
+      // The link works without signing in, and only exposes the list.
+      r = await rest('GET', '/share/' + shareToken);
+      check('anyone with the link can read it', r.status === 200 && r.data.list.name === 'Secret things', JSON.stringify(r.data).slice(0, 120));
+      check('the link carries the words', Array.isArray(r.data.list.words) && r.data.list.words.length === 2);
+      check('the link names the author', typeof r.data.list.author === 'string' && r.data.list.author.length > 0);
+
+      // Someone else cannot toggle sharing on your list.
+      const tokenO = (await rest('POST', '/auth/test-login', { username: 'other' + Math.floor(Math.random() * 1e6) })).data.token;
+      r = await rest('POST', '/lists/' + listId + '/share', { shared: false }, tokenO);
+      check('only the owner can change sharing', r.status === 404, JSON.stringify(r.data));
+
+      // And it can be turned back off.
+      r = await rest('POST', '/lists/' + listId + '/share', { shared: false }, tokenS);
+      check('sharing can be revoked', r.status === 200 && r.data.shared === false);
+      r = await rest('GET', '/share/' + shareToken);
+      check('a revoked link stops working', r.status === 404, JSON.stringify(r.data));
+
+      r = await rest('GET', '/share/not-a-real-token');
+      check('a bogus token 404s', r.status === 404);
+    }
   } catch (e) {
     fail++;
     failures.push('EXCEPTION: ' + e.message);
