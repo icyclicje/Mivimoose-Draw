@@ -300,7 +300,10 @@
     var rim = new Int32Array(rimCap);
     var rimN = 0;
 
+    var allowMask = opts._allow || null;
+
     function rawAt(p) {
+      if (allowMask && !allowMask[p]) return 0x7FFFFFFF;
       var i = p * 4;
       var r = d[i], g = d[i + 1], b = d[i + 2], a = d[i + 3];
       var rm = (r + tR) >> 1;
@@ -521,7 +524,140 @@
     return true;
   }
 
-  var MiviFill = { floodFill: floodFill };
+  var MiviFill = { floodFill: floodFill , smartFill: smartFill };
+
+
+  // ═════════════════════════════════════════════════════════════
+  // smartFill — floodFill with the two behaviours players expect:
+  //
+  //   1. A small gap in an outline must not flood the whole page. If the
+  //      plain fill would cover more than about half the canvas, it is
+  //      retried with the walls thickened by `seal` pixels (a morphological
+  //      close): the fill stays inside the shape the player was clearly
+  //      pointing at, and the mouth of the gap is plugged.
+  //   2. Everything else — feathered anti-aliased rims, outline recolouring
+  //      when the line itself is clicked — behaves exactly like floodFill,
+  //      because it IS floodFill with a precomputed allow-mask.
+  //
+  // Deterministic for identical pixels, so every client that replays the
+  // same event stream paints the same picture.
+  // ═════════════════════════════════════════════════════════════
+  function smartFill(ctx, startX, startY, fillHex, opts) {
+    opts = opts || {};
+    var canvas = ctx && ctx.canvas;
+    if (!canvas) return false;
+    var W = canvas.width | 0, H = canvas.height | 0;
+    if (W <= 0 || H <= 0) return false;
+
+    var tol = (typeof opts.tolerance === 'number') ? opts.tolerance : DEFAULT_TOLERANCE;
+    var seal = (typeof opts.seal === 'number') ? opts.seal : 14;         // device px
+    var leakFrac = (typeof opts.leakFrac === 'number') ? opts.leakFrac : 0.5;
+
+    var sx = Math.max(0, Math.min(W - 1, Math.round(startX)));
+    var sy = Math.max(0, Math.min(H - 1, Math.round(startY)));
+
+    var img;
+    try { img = ctx.getImageData(0, 0, W, H); } catch (e) { return false; }
+    var d = img.data;
+    var N = W * H;
+
+    // A cheap match mask against the seed colour — this is only steering,
+    // the real classification stays floodFill's.
+    var si = (sy * W + sx) * 4;
+    var tR = d[si], tG = d[si + 1], tB = d[si + 2];
+    var lim = 3 * tol + 30;                        // roughly floodFill's reach incl. feather
+    var open = new Uint8Array(N);
+    for (var p = 0, i = 0; p < N; p++, i += 4) {
+      var dist = Math.abs(d[i] - tR) + Math.abs(d[i + 1] - tG) + Math.abs(d[i + 2] - tB);
+      if (dist <= lim) open[p] = 1;
+    }
+
+    // Pass 1: how big would the plain fill be?
+    var region = new Uint8Array(N);
+    var stack = new Int32Array(N);
+    var top = 0, count = 0;
+    var seed = sy * W + sx;
+    if (open[seed]) {
+      stack[top++] = seed; region[seed] = 1;
+      while (top > 0) {
+        var q = stack[--top];
+        count++;
+        var qy = (q / W) | 0, qx = q - qy * W;
+        if (qx > 0 && open[q - 1] && !region[q - 1]) { region[q - 1] = 1; stack[top++] = q - 1; }
+        if (qx < W - 1 && open[q + 1] && !region[q + 1]) { region[q + 1] = 1; stack[top++] = q + 1; }
+        if (qy > 0 && open[q - W] && !region[q - W]) { region[q - W] = 1; stack[top++] = q - W; }
+        if (qy < H - 1 && open[q + W] && !region[q + W]) { region[q + W] = 1; stack[top++] = q + W; }
+      }
+    }
+
+    if (!open[seed] || count <= leakFrac * N || seal <= 0) {
+      // No leak (or the seed is an outline pixel): the plain fill is right.
+      return floodFill(ctx, startX, startY, fillHex, opts);
+    }
+
+    // Pass 2: the fill escaped — thicken the walls by `seal` and try again.
+    // Chamfer distance from every non-open pixel, two sweeps.
+    var INF = 1 << 20;
+    var distMap = new Int32Array(N);
+    for (var p2 = 0; p2 < N; p2++) distMap[p2] = open[p2] ? INF : 0;
+    for (var y1 = 0; y1 < H; y1++) {
+      for (var x1 = 0; x1 < W; x1++) {
+        var p1 = y1 * W + x1, v = distMap[p1];
+        if (x1 > 0 && distMap[p1 - 1] + 1 < v) v = distMap[p1 - 1] + 1;
+        if (y1 > 0 && distMap[p1 - W] + 1 < v) v = distMap[p1 - W] + 1;
+        distMap[p1] = v;
+      }
+    }
+    for (var y2 = H - 1; y2 >= 0; y2--) {
+      for (var x2 = W - 1; x2 >= 0; x2--) {
+        var p3 = y2 * W + x2, v2 = distMap[p3];
+        if (x2 < W - 1 && distMap[p3 + 1] + 1 < v2) v2 = distMap[p3 + 1] + 1;
+        if (y2 < H - 1 && distMap[p3 + W] + 1 < v2) v2 = distMap[p3 + W] + 1;
+        distMap[p3] = v2;
+      }
+    }
+
+    // The core: open pixels comfortably away from any wall. Flood the seed's
+    // core component…
+    if (distMap[seed] <= seal) {
+      // Clicked in a corridor narrower than the seal — fall back to plain.
+      return floodFill(ctx, startX, startY, fillHex, opts);
+    }
+    var allow = new Uint8Array(N);
+    top = 0;
+    stack[top++] = seed; allow[seed] = 1;
+    while (top > 0) {
+      var q2 = stack[--top];
+      var qy2 = (q2 / W) | 0, qx2 = q2 - qy2 * W;
+      if (qx2 > 0 && !allow[q2 - 1] && distMap[q2 - 1] > seal) { allow[q2 - 1] = 1; stack[top++] = q2 - 1; }
+      if (qx2 < W - 1 && !allow[q2 + 1] && distMap[q2 + 1] > seal) { allow[q2 + 1] = 1; stack[top++] = q2 + 1; }
+      if (qy2 > 0 && !allow[q2 - W] && distMap[q2 - W] > seal) { allow[q2 - W] = 1; stack[top++] = q2 - W; }
+      if (qy2 < H - 1 && !allow[q2 + W] && distMap[q2 + W] > seal) { allow[q2 + W] = 1; stack[top++] = q2 + W; }
+    }
+
+    // …then grow it back out through open pixels so the paint still reaches
+    // the real walls. Growing by seal+2 plugs the mouth of the gap without
+    // pouring through it (the far side's core was never reached).
+    var frontier = [];
+    for (var p4 = 0; p4 < N; p4++) if (allow[p4]) frontier.push(p4);
+    for (var step = 0; step < seal + 2 && frontier.length; step++) {
+      var next = [];
+      for (var f = 0; f < frontier.length; f++) {
+        var q3 = frontier[f];
+        var qy3 = (q3 / W) | 0, qx3 = q3 - qy3 * W;
+        if (qx3 > 0 && !allow[q3 - 1] && open[q3 - 1]) { allow[q3 - 1] = 1; next.push(q3 - 1); }
+        if (qx3 < W - 1 && !allow[q3 + 1] && open[q3 + 1]) { allow[q3 + 1] = 1; next.push(q3 + 1); }
+        if (qy3 > 0 && !allow[q3 - W] && open[q3 - W]) { allow[q3 - W] = 1; next.push(q3 - W); }
+        if (qy3 < H - 1 && !allow[q3 + W] && open[q3 + W]) { allow[q3 + W] = 1; next.push(q3 + W); }
+      }
+      frontier = next;
+    }
+
+    var sealedOpts = {};
+    for (var k in opts) sealedOpts[k] = opts[k];
+    sealedOpts._allow = allow;
+    return floodFill(ctx, startX, startY, fillHex, sealedOpts);
+  }
 
   if (typeof window !== 'undefined') window.MiviFill = MiviFill;
   if (typeof module !== 'undefined' && module.exports) module.exports = MiviFill;

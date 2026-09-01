@@ -76,6 +76,8 @@
 
   // ── Boot: restore session ──
   async function init() {
+    // The footer's version chip rides on the config fetch below.
+    const versionChip = document.getElementById('version-chip');
     // Paint the cached account before anything is awaited, so a returning
     // player is signed in the moment the page appears.
     const cached = cachedUser();
@@ -85,7 +87,11 @@
       fireChange();
     }
 
-    try { discordAvailable = !!(await API.authConfig()).discord; } catch (e) { discordAvailable = false; }
+    try {
+      const cfg = await API.authConfig();
+      discordAvailable = !!cfg.discord;
+      if (versionChip && cfg.versionLabel) versionChip.textContent = cfg.versionLabel;
+    } catch (e) { discordAvailable = false; }
 
     if (API.token()) {
       try {

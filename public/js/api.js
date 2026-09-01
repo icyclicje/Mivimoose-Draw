@@ -173,6 +173,8 @@
     modUnban: (userId) => req('POST', '/mod/unban', { userId }),
     modGenerateList: (payload) => req('POST', '/mod/generate-list', payload),
     modStats: (range) => req('GET', '/mod/stats' + (range ? '?range=' + encodeURIComponent(range) : '')),
+    leaderboard: () => req('GET', '/leaderboard'),
+    leaderboard: () => req('GET', '/leaderboard'),
 
     shareList: (id, shared) => req('POST', '/lists/' + id + '/share', { shared }),
     sharedList: (token) => req('GET', '/share/' + encodeURIComponent(token)),

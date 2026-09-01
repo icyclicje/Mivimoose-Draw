@@ -1903,3 +1903,96 @@ body.in-activity .btn-hero-sub { font-size: 0.74rem; }
   .stat-tiles { grid-template-columns: repeat(2, 1fr); }
   .bars { height: 130px; }
 }
+
+/* ══════════ Batch 22 — density pass + new pieces ══════════ */
+
+/* ── Less crammed at 100% zoom: tighter chrome everywhere. The body also
+      defaults to 90% zoom on desktops (see applyScale), so together the page
+      finally sits comfortably on a laptop screen. ── */
+.card { padding: 16px; }
+.hero { padding: 22px 0 16px; }
+.hero-sub { margin-top: 6px; }
+.home-grid { gap: 14px; }
+#main { padding: 14px 18px 32px; }
+.lobby-grid { gap: 14px; }
+.card-title { margin-bottom: 8px; }
+.opt-grid { gap: 10px 14px; }
+.opt-section { margin-top: 13px; padding-top: 11px; }
+.toggle-row { padding: 7px 9px; }
+.btn-hero { padding: 15px 19px; }
+.btn-big { padding: 12px 16px; }
+.wl-custom { margin-top: 12px; padding-top: 11px; gap: 8px; }
+.modal { padding: 22px; }
+.modal h2 { margin-bottom: 4px; }
+.modal-sub { margin-bottom: 12px; }
+
+/* ── the M badge ── */
+.mod-chip {
+  flex-shrink: 0; width: 15px; height: 15px; border-radius: 5px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--grad); color: #fff;
+  font-size: 0.56rem; font-weight: 800; line-height: 1;
+}
+
+/* ── the close-guess bar over the chat box ── */
+.close-bar {
+  display: none;
+  background: var(--brand-soft); color: var(--brand-on-soft);
+  border: 1px solid var(--brand); border-radius: var(--r-sm);
+  padding: 6px 11px; margin-bottom: 6px;
+  font-size: 0.78rem; font-weight: 800; text-align: center;
+}
+.close-bar.show { display: block; animation: closePop .25s ease; }
+@keyframes closePop { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+
+/* ── like / skip: drawn icons, tucked in the corner ── */
+.float-actions { left: auto; right: 10px; transform: none; bottom: 10px; }
+.icon-float { padding: 8px; border-radius: 12px; }
+.icon-float svg { width: 19px; height: 19px; display: block; fill: var(--ink-dim); transition: fill .15s, transform .15s; }
+#btn-like:hover svg { fill: #e0245e; transform: scale(1.12); }
+#btn-like.used svg { fill: #e0245e; }
+#btn-voteskip:hover svg { fill: var(--brand); }
+#btn-voteskip.used svg { fill: var(--brand); }
+.icon-float span:empty { display: none; }
+.icon-float span { font-size: 0.72rem; font-weight: 800; }
+
+/* ── the emoji picker at full size ── */
+.emoji-search { width: 100%; margin-bottom: 8px; position: sticky; top: 0; z-index: 2; }
+.emoji-picker { max-height: 320px; }
+
+/* ── stats: the line chart ── */
+.chart-line { position: relative; height: 190px; }
+.chart-svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+.chart-area { fill: color-mix(in srgb, var(--brand) 22%, transparent); }
+.chart-stroke {
+  fill: none; stroke: var(--brand); stroke-width: 3;
+  stroke-linejoin: round; stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
+}
+.chart-dot { fill: var(--card); stroke: var(--brand); stroke-width: 2.5; }
+.chart-dot:hover { fill: var(--brand); }
+.chart-dots { pointer-events: auto; }
+
+/* ── leaderboard ── */
+.lb-tabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
+.lb-rows { display: flex; flex-direction: column; gap: 5px; max-height: 52vh; overflow-y: auto; }
+.lb-row {
+  display: flex; align-items: center; gap: 10px;
+  background: var(--card-2); border: 1px solid transparent; border-radius: var(--r-sm);
+  padding: 8px 12px; font-size: 0.86rem;
+}
+.lb-row.me, .lb-me { border-color: var(--brand); background: var(--brand-soft); }
+.lb-rank { width: 34px; text-align: center; font-weight: 800; font-size: 0.9rem; flex-shrink: 0; }
+.lb-name { flex: 1; min-width: 0; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lb-value { font-weight: 800; color: var(--brand); font-variant-numeric: tabular-nums; }
+.lb-me { display: flex; align-items: center; gap: 10px; border: 1px solid var(--brand); border-radius: var(--r-sm); padding: 8px 12px; margin-top: 8px; font-size: 0.86rem; }
+
+/* ── words-in-a-list viewer ── */
+.mw-words { max-height: 46vh; margin-top: 10px; }
+
+/* ── footer version chip ── */
+.version-chip {
+  font-size: 0.68rem; font-weight: 800; letter-spacing: .4px;
+  background: var(--card-2); border: 1px solid var(--line);
+  border-radius: 99px; padding: 2px 9px; color: var(--ink-dim);
+}

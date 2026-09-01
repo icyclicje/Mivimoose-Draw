@@ -613,8 +613,14 @@
       close: msg.isClose, system: msg.system, whisper: msg.whisper,
     }));
 
-    socket.on('closeGuess', () => {
-      toast('🔥 So close!');
+    socket.on('closeGuess', ({ combo, part } = {}) => {
+      let msg = "🔥 So close — check the spelling!";
+      if (combo) {
+        msg = part === 0 ? '🔥 That is almost the FIRST word!'
+          : part === 1 ? '🔥 That is almost the SECOND word!'
+          : '🔥 One half of it is nearly right!';
+      }
+      showCloseBar(msg);
       sfx('close');
     });
 
@@ -865,11 +871,12 @@
     const card = $('canvas-card');
     const toolbar = $('toolbar');
     const toolbarH = toolbar.style.display !== 'none' ? toolbar.offsetHeight + 12 : 0;
-    const top = card.getBoundingClientRect().top;
+    const z = uiZoom();
+    const top = card.getBoundingClientRect().top;   // viewport (zoomed) px
     const vh = (window.visualViewport && window.visualViewport.height) || window.innerHeight;
-    // Just enough breathing room under the card to not touch the edge —
-    // every pixel saved here goes straight into the drawing.
-    const avail = vh - top - toolbarH - 10;
+    // Convert the viewport numbers into layout pixels so they can be
+    // compared with element sizes — CSS zoom scales the two apart.
+    const avail = (vh - top) / z - toolbarH - 10;
     const byHeight = Math.floor(avail * 4 / 3);
     const byWidth = card.clientWidth - 24;
     const maxW = Math.max(320, Math.min(byHeight, byWidth || byHeight));
@@ -891,7 +898,7 @@
     const grid = $('game-grid');
     if (!grid) return;
     // Narrow layouts stack, and fullscreen has its own rules — leave both be.
-    if (window.innerWidth < 1081 || document.body.classList.contains('focus-mode')) {
+    if (window.innerWidth / uiZoom() < 1081 || document.body.classList.contains('focus-mode')) {
       grid.style.removeProperty('grid-template-columns');
       return;
     }
@@ -1055,6 +1062,11 @@
       chipName.title = p.name;
       chip.appendChild(chipName);
       if (p.id === s.host) chip.appendChild(el('span', null, '👑'));
+      if (p.mod) {
+        const m = el('span', 'mod-chip', 'M');
+        m.title = 'Moderator';
+        chip.appendChild(m);
+      }
       if (isHost && p.id !== myId) {
         const kick = el('button', 'kick', '✕');
         kick.title = 'Kick';
@@ -1191,9 +1203,50 @@
       const meta = el('div', 'wl-meta');
       meta.appendChild(el('span', 'cnt', info.count + (info.count === 1 ? ' word' : ' words')));
       const actions = el('span', 'wl-actions');
+      // Your own contribution (or a built-in) opens for reading; a list a
+      // room-mate added stays theirs, crown or no crown.
+      const mineToRead = !info.custom || info.owner === myId;
+      if (mineToRead) {
+        const infoBtn = el('button', 'wl-info', 'ℹ️');
+        infoBtn.title = 'See every word in ' + (info.label || info.name);
+        infoBtn.onclick = async (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          try {
+            const ws = await roomListWords(info.name);
+            openWordsModal(info.label || info.name, ws);
+          } catch (err) { toast('❌ ' + err.message); }
+        };
+        actions.appendChild(infoBtn);
+      }
       meta.appendChild(actions);
       item.appendChild(meta);
 
+      if (info.custom && info.owner === myId) {
+        const ex2 = el('button', 'wl-export', '⬇️');
+        ex2.title = 'Export as .txt';
+        ex2.onclick = (e) => { e.preventDefault(); socket.emit('exportCustomList', { name: info.name }); };
+        actions.appendChild(ex2);
+
+        const keep2 = el('button', 'wl-keep', '📥');
+        keep2.title = 'Save this list to my account';
+        keep2.onclick = async (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          if (!window.MiviAccount.isLoggedIn()) { toast('📚 Sign in to keep lists on your account.'); return; }
+          keep2.disabled = true;
+          try {
+            const ws = await roomListWords(info.name);
+            if (!ws.length) throw new Error('That list came back empty.');
+            await API.createList(info.name, ws);
+            toast(`📥 "${info.name}" saved to your lists`);
+            renderMyLists();
+            window.MiviAccount.refreshLists();
+          } catch (err) { toast('❌ ' + err.message); }
+          finally { keep2.disabled = false; }
+        };
+        actions.appendChild(keep2);
+      }
       if (info.custom) {
         const ren = el('button', 'wl-rename', '✏️');
         ren.title = 'Rename this list';
@@ -1229,36 +1282,6 @@
         };
         actions.appendChild(ren);
 
-        const ex = el('button', 'wl-export', '⬇️');
-        ex.title = 'Export as .txt';
-        ex.onclick = (e) => { e.preventDefault(); socket.emit('exportCustomList', { name: info.name }); };
-        actions.appendChild(ex);
-
-        // Straight into your account's lists, without a trip to the library.
-        const keep = el('button', 'wl-keep', '📥');
-        keep.title = 'Save this list to my account';
-        keep.onclick = async (e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          if (!window.MiviAccount.isLoggedIn()) {
-            toast('📚 Sign in to keep lists on your account.');
-            return;
-          }
-          keep.disabled = true;
-          try {
-            const words = await roomListWords(info.name);
-            if (!words.length) throw new Error('That list came back empty.');
-            await API.createList(info.name, words);
-            toast(`📥 "${info.name}" saved to your lists`);
-            renderMyLists();
-            window.MiviAccount.refreshLists();
-          } catch (err) {
-            toast('❌ ' + err.message);
-          } finally {
-            keep.disabled = false;
-          }
-        };
-        actions.appendChild(keep);
 
         const rm = el('button', 'wl-remove', '🗑️');
         rm.title = 'Remove this list from the room';
@@ -1495,6 +1518,11 @@
         const crown = el('span', 'crown', '👑');
         crown.title = 'Host';
         row.appendChild(crown);
+      }
+      if (p.mod) {
+        const m = el('span', 'mod-chip', 'M');
+        m.title = 'Moderator';
+        row.appendChild(m);
       }
       if (isDrawing) row.appendChild(el('span', 'flag', '🖌️'));
       else if (guessed) row.appendChild(el('span', 'flag', '✅'));
@@ -1740,6 +1768,24 @@
     }
   }
 
+  // A bar over the guess box beats a toast in the corner nobody watches.
+  let closeBarTimer = null;
+  function showCloseBar(msg) {
+    let bar = $('close-bar');
+    if (!bar) {
+      bar = el('div', 'close-bar');
+      bar.id = 'close-bar';
+      const row = $('game-chat-input').parentNode;
+      row.parentNode.insertBefore(bar, row);
+    }
+    bar.textContent = msg;
+    bar.classList.remove('show');
+    void bar.offsetWidth;
+    bar.classList.add('show');
+    clearTimeout(closeBarTimer);
+    closeBarTimer = setTimeout(() => bar.classList.remove('show'), 2600);
+  }
+
   function sendGameChat() {
     const input = $('game-chat-input');
     const text = input.value.trim();
@@ -1836,13 +1882,46 @@
     ['Symbols', ['❤️','💔','✨','💥','💤','❓','❗','✅','❌','➕','➖','🔴','🟠','🟡','🟢','🔵','🟣','⚫','⚪','🟤']],
   ];
 
+  // The full Unicode emoji blocks, on top of the curated groups. Built
+  // lazily the first time the picker opens; ~1,800 glyphs.
+  const EMOJI_RANGES = [
+    [0x1F600, 0x1F64F], [0x1F300, 0x1F5FF], [0x1F680, 0x1F6FF],
+    [0x1F90D, 0x1F9FF], [0x1FA70, 0x1FAC5], [0x1FAD0, 0x1FADB],
+    [0x1FAE0, 0x1FAE8], [0x1FAF0, 0x1FAF8], [0x2600, 0x26FF], [0x2700, 0x27BF],
+  ];
+
+  function allEmoji() {
+    const seen = new Set();
+    const out = [];
+    const curated = new Set();
+    for (const [, list] of EMOJI_GROUPS) for (const e of list) curated.add(e);
+    for (const [a, b] of EMOJI_RANGES) {
+      for (let cp = a; cp <= b; cp++) {
+        const ch = String.fromCodePoint(cp);
+        if (seen.has(ch) || curated.has(ch)) continue;
+        seen.add(ch);
+        out.push(ch);
+      }
+    }
+    return out;
+  }
+
   let pendingEmoji = null;
 
   function buildEmojiPicker() {
     const box = $('emoji-picker');
     if (!box || box.dataset.built === '1') return;
     box.dataset.built = '1';
-    for (const [label, list] of EMOJI_GROUPS) {
+
+    // A filter box at the top — with this many glyphs you need one.
+    const search = document.createElement('input');
+    search.type = 'search';
+    search.className = 'input emoji-search';
+    search.placeholder = 'Filter groups, or paste an emoji';
+    search.addEventListener('input', () => filterEmojiPicker(search.value));
+    search.addEventListener('keydown', (e) => e.stopPropagation());
+    box.appendChild(search);
+    for (const [label, list] of EMOJI_GROUPS.concat([['Everything', allEmoji()]])) {
       const head = el('div', 'emoji-group-label', label);
       head.dataset.group = label.toLowerCase();
       box.appendChild(head);
@@ -1884,6 +1963,21 @@
 
   // Emoji are placed by pressing where you want them and dragging outwards
   // to choose how big — release to stamp. A plain tap uses the brush size.
+  function filterEmojiPicker(q) {
+    const box = $('emoji-picker');
+    const query = String(q || '').trim().toLowerCase();
+    let currentLabel = '';
+    for (const node of box.children) {
+      if (node.classList && node.classList.contains('emoji-group-label')) {
+        currentLabel = node.textContent.toLowerCase();
+        node.style.display = !query || currentLabel.includes(query) ? '' : 'none';
+      } else if (node.tagName === 'BUTTON') {
+        const hit = !query || currentLabel.includes(query) || node.textContent === q.trim();
+        node.style.display = hit ? '' : 'none';
+      }
+    }
+  }
+
   let emojiDrag = null;
   const EMOJI_MIN = 12, EMOJI_MAX = 320;
 
@@ -2036,7 +2130,7 @@
     }
 
     drawing = true;
-    if (['line', 'rect', 'circle', 'triangle', 'arrow'].includes(currentTool)) {
+    if (['line', 'rect', 'circle', 'triangle'].includes(currentTool)) {
       shape = { x1: p.x, y1: p.y };
       return;
     }
@@ -2188,8 +2282,6 @@
       pctx.rect(x1, y1, x2 - x1, y2 - y1);
     } else if (currentTool === 'triangle') {
       traceTriangle(pctx, x1, y1, x2, y2, brushSize);
-    } else if (currentTool === 'arrow') {
-      traceArrow(pctx, x1, y1, x2, y2, brushSize);
     } else if (currentTool === 'circle') {
       const rx = Math.abs(x2 - x1) / 2, ry = Math.abs(y2 - y1) / 2;
       if (rx > 0 && ry > 0) pctx.ellipse((x1 + x2) / 2, (y1 + y2) / 2, rx, ry, 0, 0, Math.PI * 2);
@@ -2276,8 +2368,13 @@
   // The good fill (anti-alias aware, scanline) lives in fill.js; this keeps
   // working if that file ever fails to load.
   function fillAt(targetCtx, x, y, hex) {
+    if (window.MiviFill && window.MiviFill.smartFill) {
+      // Generous: a wider tolerance for anti-aliased edges, and gaps up to
+      // ~7 canvas pixels get sealed instead of flooding the page.
+      return window.MiviFill.smartFill(targetCtx, x, y, hex, { tolerance: 40, seal: 7 * CANVAS_SCALE });
+    }
     if (window.MiviFill && window.MiviFill.floodFill) {
-      return window.MiviFill.floodFill(targetCtx, x, y, hex, { tolerance: 32 });
+      return window.MiviFill.floodFill(targetCtx, x, y, hex, { tolerance: 40 });
     }
     return floodFill(targetCtx, x, y, hex);
   }
@@ -3346,9 +3443,23 @@
   }
 
   function applyScale(v) {
-    document.documentElement.style.fontSize = (16 * v / 100) + 'px';
+    // zoom scales boxes and text together; the old font-size approach only
+    // shrank the words and left every card the same size.
+    document.body.style.zoom = String(v / 100);
     $('set-scale-val').textContent = v + '%';
     API.lsSet('mivi_scale', String(v));
+  }
+
+  function uiZoom() {
+    const z = parseFloat(document.body.style.zoom);
+    return Number.isFinite(z) && z > 0 ? z : 1;
+  }
+
+  // 100% browser zoom on a desktop was visibly oversized — 90% is the size
+  // the layout was actually designed at. First visit only; the slider wins
+  // after that.
+  function defaultScale() {
+    return window.innerWidth >= 1100 ? 90 : 100;
   }
 
   function syncAudioUI() {
@@ -3785,6 +3896,55 @@
     }
   }
 
+
+  // ══════════ Leaderboard ══════════
+  let lbData = null;
+  let lbCat = 'points';
+
+  async function openLeaderboard() {
+    sfx('pop');
+    $('modal-leaderboard').style.display = 'flex';
+    try {
+      lbData = await API.leaderboard();
+    } catch (e) {
+      toast('❌ ' + e.message);
+      return;
+    }
+    renderLeaderboard();
+  }
+
+  function renderLeaderboard() {
+    if (!lbData) return;
+    const cat = lbData.categories[lbCat];
+    const rows = $('lb-rows');
+    rows.textContent = '';
+    if (!cat || !cat.rows.length) {
+      rows.appendChild(el('p', 'gallery-empty', 'Nobody on the board yet — stats start counting the first game a signed-in player finishes.'));
+    }
+    const medals = ['🥇', '🥈', '🥉'];
+    for (const r of (cat ? cat.rows : [])) {
+      const row = el('div', 'lb-row' + (r.me ? ' me' : ''));
+      row.appendChild(el('span', 'lb-rank', r.rank <= 3 ? medals[r.rank - 1] : '#' + r.rank));
+      row.appendChild(avatarNode({ avatar: r.avatar || { emoji: '🎨', color: '#6C5CE7' }, avatarUrl: r.avatarUrl }, 'p-avatar'));
+      const nm = el('span', 'lb-name', r.username + (r.me ? ' (you)' : ''));
+      nm.title = r.username;
+      row.appendChild(nm);
+      row.appendChild(el('span', 'lb-value', r.value.toLocaleString()));
+      rows.appendChild(row);
+    }
+    const me = $('lb-me');
+    if (cat && cat.myRank && !cat.rows.some(r => r.me)) {
+      me.style.display = 'flex';
+      me.textContent = '';
+      me.appendChild(el('span', 'lb-rank', '#' + cat.myRank));
+      me.appendChild(el('span', 'lb-name', 'You'));
+      me.appendChild(el('span', 'lb-value', (cat.myValue || 0).toLocaleString()));
+    } else {
+      me.style.display = 'none';
+    }
+    $('lb-sub').textContent = (cat ? cat.label : '') + ' · ' + lbData.players + ' players with stats';
+  }
+
   // ══════════ Moderator statistics ══════════
   // Charts are plain divs — a charting library would be the first real
   // dependency this project has, for four bar charts.
@@ -3808,18 +3968,32 @@
     }
     const valueOf = opts.value || (p => p.peak);
     const max = Math.max(1, ...points.map(valueOf));
-    const bars = el('div', 'bars');
-    for (const p of points) {
-      const v = valueOf(p);
-      const col = el('div', 'bar-col');
-      const bar = el('div', 'bar');
-      bar.style.height = Math.max(2, (v / max) * 100) + '%';
-      if (v === 0) bar.classList.add('zero');
-      bar.title = `${opts.label || 'Peak'}: ${v}  ·  ${opts.fmt ? opts.fmt(p.t) : new Date(p.t).toLocaleString()}`;
-      col.appendChild(bar);
-      bars.appendChild(col);
-    }
-    host.appendChild(bars);
+
+    // One line with the area under it — SVG, no library.
+    const CW = 1000, CH = 260, PADL = 8, PADB = 8;
+    const stepX = points.length > 1 ? (CW - PADL * 2) / (points.length - 1) : 0;
+    const yOf = (v) => CH - PADB - (v / max) * (CH - PADB * 2);
+    let lineD = '';
+    let dots = '';
+    points.forEach((p, i) => {
+      const x = PADL + i * stepX;
+      const y = yOf(valueOf(p));
+      lineD += (i ? ' L ' : 'M ') + x.toFixed(1) + ' ' + y.toFixed(1);
+      dots += '<circle cx="' + x.toFixed(1) + '" cy="' + y.toFixed(1) + '" r="4" class="chart-dot">'
+        + '<title>' + (opts.label || 'Peak') + ': ' + valueOf(p) + (opts.fmt ? ' · ' + opts.fmt(p.t) : '') + '</title></circle>';
+    });
+    const single = points.length === 1;
+    const areaD = single ? '' : lineD
+      + ' L ' + (PADL + (points.length - 1) * stepX).toFixed(1) + ' ' + (CH - PADB)
+      + ' L ' + PADL + ' ' + (CH - PADB) + ' Z';
+    const wrap = el('div', 'chart-line');
+    wrap.innerHTML =
+      '<svg viewBox="0 0 ' + CW + ' ' + CH + '" preserveAspectRatio="none" class="chart-svg">'
+      + (areaD ? '<path d="' + areaD + '" class="chart-area"/>' : '')
+      + (single ? '' : '<path d="' + lineD + '" class="chart-stroke"/>')
+      + '</svg>'
+      + '<svg viewBox="0 0 ' + CW + ' ' + CH + '" class="chart-svg chart-dots">' + dots + '</svg>';
+    host.appendChild(wrap);
 
     // A handful of labels along the bottom — more than about six is mush.
     const axis = el('div', 'bar-axis');
@@ -4188,8 +4362,16 @@
   }
 
   function openLibrary() {
+    sfx('pop');
     $('modal-library').style.display = 'flex';
     showLibTab('browse');
+    // Paint the last visit's shelf immediately; the fresh fetch replaces it.
+    try {
+      const cached = JSON.parse(API.lsGet('mivi_lib_cache') || 'null');
+      if (cached && Array.isArray(cached.lists) && !$('lib-rows').children.length) {
+        for (const l of cached.lists) $('lib-rows').appendChild(libCard(l));
+      }
+    } catch (e) {}
     refreshLibrary();
     setTimeout(() => { const q = $('lib-q'); if (q) q.focus(); }, 60);
   }
@@ -4354,6 +4536,11 @@
     }
     if (seq !== libSeq) return;              // a newer search overtook this one
 
+    // Remember an unfiltered first page for the instant paint next visit.
+    if (!append && !libState.q && !libState.tag && !libState.difficulty && !libState.author) {
+      try { API.lsSet('mivi_lib_cache', JSON.stringify({ lists: data.lists.slice(0, 30) })); } catch (e) {}
+    }
+
     if (!append) rows.textContent = '';
     for (const l of data.lists) rows.appendChild(libCard(l));
 
@@ -4499,6 +4686,31 @@
     }
   }
 
+  // A plain viewer: every word in a list, with a filter box.
+  let wordsModalWords = [];
+  function openWordsModal(title, ws) {
+    wordsModalWords = ws || [];
+    $('mw-title').textContent = title;
+    $('mw-sub').textContent = wordsModalWords.length + (wordsModalWords.length === 1 ? ' word' : ' words');
+    $('mw-search').value = '';
+    renderWordsModal('');
+    $('modal-words').style.display = 'flex';
+    setTimeout(() => $('mw-search').focus(), 50);
+  }
+
+  function renderWordsModal(q) {
+    const box = $('mw-words');
+    box.textContent = '';
+    const query = String(q || '').trim().toLowerCase();
+    let shown = 0;
+    for (const w of wordsModalWords) {
+      if (query && w.toLowerCase().indexOf(query) === -1) continue;
+      box.appendChild(el('span', 'li-word', w));
+      shown++;
+    }
+    if (!shown) box.appendChild(el('span', 'li-word muted', query ? 'nothing matches' : 'empty list'));
+  }
+
   // Same splitting rule the server uses, so what we cache matches what the
   // room actually got.
   function parseWordText(text) {
@@ -4606,8 +4818,9 @@
     // 'dark' was the old id for what is now Midnight.
     const savedTheme = API.lsGet('mivi_theme');
     applyTheme(savedTheme === 'dark' ? 'midnight' : (savedTheme || DEFAULT_THEME));
-    const scale = parseInt(API.lsGet('mivi_scale'), 10);
-    if (scale) { $('set-scale').value = scale; applyScale(scale); }
+    const scale = parseInt(API.lsGet('mivi_scale'), 10) || defaultScale();
+    $('set-scale').value = scale;
+    applyScale(scale);
     $('home-name').value = API.lsGet('mivi_name') || '';
 
     setupCanvas();
@@ -5096,6 +5309,14 @@
 
     // ── statistics (moderators) ──
     $('btn-open-stats').addEventListener('click', openStats);
+    $('btn-leaderboard').addEventListener('click', openLeaderboard);
+    document.querySelectorAll('#lb-tabs [data-cat]').forEach(b =>
+      b.addEventListener('click', () => {
+        lbCat = b.dataset.cat;
+        document.querySelectorAll('#lb-tabs [data-cat]').forEach(x => x.classList.toggle('on', x === b));
+        renderLeaderboard();
+      }));
+    $('mw-search').addEventListener('input', (e) => renderWordsModal(e.target.value));
     document.querySelectorAll('#stats-tabs .tab').forEach(t =>
       t.addEventListener('click', () => showStatTab(t.dataset.stab)));
     document.querySelectorAll('#stat-ranges [data-range]').forEach(b =>
@@ -5112,11 +5333,29 @@
     wireChatHistory($('lobby-chat-input'), 'lobby');
     $('btn-vote-list').addEventListener('click', startVoteAddList);
 
+    // The like/skip pair are drawn icons now, not emoji at the mercy of the
+    // platform's font.
+    const HEART_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21C5.5 16.3 2 12.8 2 8.9 2 6 4.2 4 6.9 4c1.8 0 3.5.9 4.4 2.4h1.4C13.6 4.9 15.3 4 17.1 4 19.8 4 22 6 22 8.9c0 3.9-3.5 7.4-10 12.1z"/></svg>';
+    const SKIP_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5v13c0 .8.9 1.3 1.6.9l9.9-6.5c.6-.4.6-1.4 0-1.8L5.6 4.6C4.9 4.2 4 4.7 4 5.5z"/><rect x="17" y="4" width="3" height="16" rx="1.2"/></svg>';
+    const likeBtn = $('btn-like');
+    const skipBtn = $('btn-voteskip');
+    likeBtn.innerHTML = HEART_SVG + '<span id="like-count"></span>';
+    skipBtn.innerHTML = SKIP_SVG + '<span id="skip-count"></span>';
+    likeBtn.classList.add('icon-float');
+    skipBtn.classList.add('icon-float');
+
+    // Light UI sounds in one delegated place.
+    document.addEventListener('click', (e) => {
+      if (e.target.closest('.tab, .lib-tag')) sfx('click');
+      else if (e.target.closest('.modal-x')) sfx('pop');
+    });
+
     startRoomsPoll();
   });
 
   window.MiviApp = {
     toast,
+    sfx,
     // Used by the list library: can the current player drop a list into a room?
     canAddRoomList: () => !!roomCode && !!gameState && gameState.state === 'lobby' && gameState.host === myId && !gameState.managed,
     addRoomList: (name, text) => { if (socket) socket.emit('addCustomList', { name, text }); },

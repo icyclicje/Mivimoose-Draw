@@ -115,6 +115,7 @@
         </div>
         <button class="btn btn-big" id="btn-rejoin-activity" style="display:none">🎮 Back to your channel's game</button>
         <button class="btn btn-big btn-alt btn-library" id="btn-library">📚 List library <span class="btn-library-sub">grab word lists other people made, or share your own</span></button>
+        <button class="btn btn-big btn-alt btn-library" id="btn-leaderboard">🏆 Leaderboard <span class="btn-library-sub">the best artists and fastest guessers on the server</span></button>
       </div>
 
       <div class="card rooms-card">
@@ -133,6 +134,8 @@
       <a href="/privacy" data-doc="privacy">Privacy</a>
       <span aria-hidden="true">·</span>
       <a href="/terms" data-doc="terms">Terms</a>
+      <span aria-hidden="true">·</span>
+      <span class="version-chip" id="version-chip">Beta 1.0</span>
     </p>
   </section>
 
@@ -408,7 +411,6 @@ t-shirt</pre>
             <button class="tool-btn" data-tool="rect" title="Rectangle (R)">▭</button>
             <button class="tool-btn" data-tool="circle" title="Ellipse (C)">◯</button>
             <button class="tool-btn" data-tool="triangle" title="Triangle (T)">△</button>
-            <button class="tool-btn" data-tool="arrow" title="Arrow (A)">➜</button>
             <button class="tool-btn tool-text" data-tool="text" id="tool-text" title="Text (X)" style="display:none">T</button>
             <button class="tool-btn" data-tool="emoji" id="tool-emoji" title="Stamp an emoji (M)" style="display:none">😀</button>
             <button class="tool-btn" id="tool-scene" title="Pick a backdrop" style="display:none">🖼️</button>
@@ -889,6 +891,39 @@ t-shirt</pre>
         </div>
       </div>
     </div>
+  </div>
+</div>
+
+<!-- ══════════ WORDS IN A LIST ══════════ -->
+<div class="modal-backdrop" id="modal-words" style="display:none">
+  <div class="modal">
+    <button class="modal-x" data-close="modal-words">✕</button>
+    <h2 id="mw-title">Words</h2>
+    <p class="modal-sub" id="mw-sub"></p>
+    <div class="lib-search">
+      <span class="lib-search-icon">🔍</span>
+      <input type="search" id="mw-search" class="input" placeholder="Search these words" />
+    </div>
+    <div class="li-words mw-words" id="mw-words"></div>
+  </div>
+</div>
+
+<!-- ══════════ LEADERBOARD ══════════ -->
+<div class="modal-backdrop" id="modal-leaderboard" style="display:none">
+  <div class="modal modal-lg">
+    <button class="modal-x" data-close="modal-leaderboard">✕</button>
+    <h2>🏆 Leaderboard</h2>
+    <p class="modal-sub" id="lb-sub">Every signed-in player, ranked. Guests don't keep stats — that's the price of anonymity.</p>
+    <div class="lb-tabs" id="lb-tabs">
+      <button class="lib-tag on" data-cat="points">Points</button>
+      <button class="lib-tag" data-cat="wins">Wins</button>
+      <button class="lib-tag" data-cat="games">Games</button>
+      <button class="lib-tag" data-cat="guesses">Words guessed</button>
+      <button class="lib-tag" data-cat="drawn">Words drawn</button>
+      <button class="lib-tag" data-cat="likes">Likes</button>
+    </div>
+    <div class="lb-rows" id="lb-rows"></div>
+    <div class="lb-me" id="lb-me" style="display:none"></div>
   </div>
 </div>
 

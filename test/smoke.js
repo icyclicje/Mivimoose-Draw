@@ -1884,6 +1884,108 @@ async function main() {
       r = await rest('GET', '/share/not-a-real-token');
       check('a bogus token 404s', r.status === 404);
     }
+
+    console.log('— word balance —');
+    {
+      // Strict round-robin: no word may be drawn N+1 times while a
+      // list-mate is still on N.
+      const wordsLib = require('../lib/words');
+      const roomStub = {
+        customLists: { Bal: ['alpha', 'beta', 'gamma', 'delta'] },
+        selectedLists: ['Bal'],
+        listWeights: {},
+        options: { avoidRepeats: false },
+        wordUsedCount: {},
+        wordOffered: new Set(),
+      };
+      let balanced = true;
+      for (let i = 0; i < 40; i++) {
+        const picks = wordsLib.getWordChoicesWithSource(roomStub, 1);
+        const w = picks[0].word;
+        roomStub.wordUsedCount[w] = (roomStub.wordUsedCount[w] || 0) + 1;
+        const counts = ['alpha', 'beta', 'gamma', 'delta'].map(x => roomStub.wordUsedCount[x] || 0);
+        if (Math.max(...counts) - Math.min(...counts) > 1) balanced = false;
+      }
+      check('words are drawn in strict rotation', balanced, JSON.stringify(roomStub.wordUsedCount));
+    }
+
+    console.log('— list ownership survives a host transfer —');
+    {
+      const OH = connect({ guestKey: 'ea' + Date.now().toString(16).padStart(14, '0') });
+      await once(OH, 'welcome');
+      let rp = once(OH, 'roomCreated');
+      OH.emit('createRoom', { name: 'Owner', avatar: '🎨' });
+      const oCode = (await rp).code;
+      const OG = connect({ guestKey: 'eb' + Date.now().toString(16).padStart(14, '0') });
+      await once(OG, 'welcome');
+      rp = once(OG, 'roomJoined');
+      OG.emit('joinRoom', { code: oCode, name: 'NextHost', avatar: '🐱' });
+      await rp;
+
+      let up = once(OH, 'stateUpdate');
+      OH.emit('addCustomList', { name: 'MySecrets', text: 'unicorn\ndragon' });
+      await up;
+
+      // The person who added it can read it…
+      const mine = once(OH, 'customListWords', 5000);
+      OH.emit('getCustomList', { name: 'MySecrets' });
+      check('the contributor can read their list', (await mine).words.length === 2);
+
+      // …a room-mate cannot, host or not.
+      const refused = once(OG, 'error', 4000);
+      OG.emit('getCustomList', { name: 'MySecrets' });
+      check('someone else cannot read it', /added that list/i.test((await refused).message || ''));
+      const refused2 = once(OG, 'error', 4000);
+      OG.emit('exportCustomList', { name: 'MySecrets' });
+      check('someone else cannot export it', /added that list/i.test((await refused2).message || ''));
+
+      // Built-ins are open to everyone.
+      const classic = once(OG, 'customListWords', 5000);
+      OG.emit('getCustomList', { name: 'classic' });
+      check('built-in lists are readable by anyone', (await classic).words.length > 10);
+
+      // The list is flagged with its owner in the room state.
+      const st = once(OH, 'stateUpdate', 5000);
+      OH.emit('requestState');
+      const stData = await st;
+      const entry = stData.wordLists.available.find(l => l.name === 'MySecrets');
+      check('the state names the list owner', !!entry && typeof entry.owner === 'string', JSON.stringify(entry && entry.owner));
+
+      OH.disconnect(); OG.disconnect();
+      await sleep(200);
+    }
+
+    console.log('— leaderboard & version —');
+    {
+      let r = await rest('GET', '/auth/config');
+      check('the config carries the version', /^Beta /.test(r.data.versionLabel || ''), JSON.stringify(r.data.versionLabel));
+
+      r = await rest('GET', '/leaderboard');
+      check('the leaderboard is public', r.status === 200 && r.data.categories, JSON.stringify(r.status));
+      const cats = ['games', 'wins', 'points', 'guesses', 'drawn', 'likes'];
+      check('all six categories are there', cats.every(c => r.data.categories[c] && Array.isArray(r.data.categories[c].rows)));
+      const pts = r.data.categories.points.rows;
+      const sorted = pts.every((row, i) => i === 0 || pts[i - 1].value >= row.value);
+      check('rows are ranked high to low', sorted);
+      check('total player count reported', typeof r.data.players === 'number');
+    }
+
+    console.log('— mod status is stored & reported —');
+    {
+      const tokenM = (await rest('POST', '/auth/test-login', { username: 'Silk' })).data.token;
+      // Touching a mod power makes the bootstrap badge permanent (stored).
+      await rest('GET', '/mod/users', undefined, tokenM);
+      const r = await rest('GET', '/mod/stats?range=24h', undefined, tokenM);
+      check('the moderator list is not empty', r.data.moderation.moderators.length >= 1, JSON.stringify(r.data.moderation.moderators));
+      check('Silk holds a stored badge', r.data.moderation.moderators.some(m => m.username === 'Silk'));
+      check('total accounts on the site are reported', r.data.totals.accounts >= 1, String(r.data.totals.accounts));
+    }
+
+    console.log('— smart fill —');
+    {
+      const MiviFill = require('../public/js/fill.js');
+      check('smartFill ships alongside floodFill', typeof MiviFill.smartFill === 'function' && typeof MiviFill.floodFill === 'function');
+    }
   } catch (e) {
     fail++;
     failures.push('EXCEPTION: ' + e.message);
