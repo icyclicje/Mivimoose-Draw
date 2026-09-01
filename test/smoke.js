@@ -2169,6 +2169,49 @@ async function main() {
         !huge || huge.words.length === 60000, huge ? String(huge.words.length) : 'not cached');
     }
 
+    console.log('— random word count spreads at every setting —');
+    {
+      // The complaint was "any setting but 5 only ever gives you two".
+      // The roll must span 2..setting whatever the slider says.
+      const g = fs.readFileSync(require('path').join(__dirname, '../lib/game.js'), 'utf8');
+      const grabFn = (src, name) => {
+        const start = src.indexOf('function ' + name + '(');
+        let k = src.indexOf('{', start), depth = 0;
+        for (; k < src.length; k++) {
+          if (src[k] === '{') depth++;
+          else if (src[k] === '}') { depth--; if (!depth) break; }
+        }
+        return src.slice(start, k + 1);
+      };
+      const rollSrc = grabFn(g, 'rollWordChoices');
+      const roll = new Function('room', rollSrc + '; return rollWordChoices(room);');
+      let allGood = true, detail = [];
+      for (const set of [3, 4, 5, 8, 12, 25]) {
+        const room = { options: { wordChoices: set, randomWordChoices: true } };
+        const seen = new Set();
+        for (let i = 0; i < 4000; i++) seen.add(roll(room));
+        const lo = Math.min(...seen), hi = Math.max(...seen);
+        if (lo !== 2 || hi !== set || seen.size !== set - 1) { allGood = false; detail.push(set + '->' + lo + '..' + hi); }
+      }
+      check('random word count spans 2..setting for every slider value', allGood, detail.join(' '));
+
+      const fixed = { options: { wordChoices: 9, randomWordChoices: false } };
+      check('with random off the setting is used exactly', roll(fixed) === 9, String(roll(fixed)));
+
+      const timeSrc = grabFn(g, 'rollRoundTime');
+      // rollRoundTime leans on a module constant, so bring it along.
+      // rollRoundTime leans on a module constant, so bring it along.
+      const ci = g.indexOf('const RANDOM_TIME_MIN');
+      const minConst = ci < 0 ? 'const RANDOM_TIME_MIN = 30;' : g.slice(ci, g.indexOf(';', ci) + 1);
+      const rollT = new Function('room', minConst + ' ' + timeSrc + '; return rollRoundTime(room);');
+      const t = new Set();
+      for (let i = 0; i < 4000; i++) t.add(rollT({ options: { roundTime: 120, randomRoundTime: true } }));
+      const tl = Math.min(...t), th = Math.max(...t);
+      check('random draw time stays inside its band', tl >= 30 && th <= 120 && t.size > 3, tl + '..' + th);
+      check('an untimed round stays untimed when rolling',
+        rollT({ options: { roundTime: 0, randomRoundTime: true } }) === 0);
+    }
+
     console.log('— smart fill —');
     {
       const MiviFill = require('../public/js/fill.js');

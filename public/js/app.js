@@ -1283,7 +1283,7 @@
     const o = s.options;
     const items = [
       ['Rounds', o.rounds],
-      ['Draw time', o.roundTime + 's'],
+      ['Draw time', o.randomRoundTime && o.roundTime > 0 ? '🎲 ≤' + o.roundTime + 's' : (o.roundTime === 0 ? '∞' : o.roundTime + 's')],
       ['Hints', o.hidden ? '—' : o.hintCount],
       ['Max players', o.maxPlayers],
       ['Lists', s.wordLists.selected.length],
@@ -1565,13 +1565,21 @@
   }
 
   const OPT_KEYS = ['rounds', 'roundTime', 'pickTime', 'wordChoices', 'hintCount', 'hintSpeed', 'maxPlayers', 'autocorrectStrength', 'strokeLimit'];
-  const OPT_TOGGLES = ['combinations', 'lockComboParts', 'hidden', 'coopMode', 'relayMode', 'mirrorMode', 'oneColorMode', 'suddenDeath', 'wetPaint', 'tileReveal', 'randomRoundTime', 'randomWordChoices', 'showWordSource', 'spamProtection', 'textTool', 'avoidRepeats', 'sceneBackgrounds', 'lockOnGuess', 'showPunctuation'];
+  const OPT_TOGGLES = ['combinations', 'lockComboParts', 'hidden', 'coopMode', 'relayMode', 'mirrorMode', 'oneColorMode', 'suddenDeath', 'wetPaint', 'tileReveal', 'showWordSource', 'spamProtection', 'textTool', 'avoidRepeats', 'sceneBackgrounds', 'lockOnGuess', 'showPunctuation'];
+
+  // "Random" is the stop just past the top of these two sliders. The number
+  // the host last set stays on as the ceiling the roll runs up to, so the
+  // one control says both things: 🎲 Random ≤90s.
+  const RANDOM_STOP = {
+    roundTime: { max: 250, flag: 'randomRoundTime', fallback: 90, unit: 's' },
+    wordChoices: { max: 26, flag: 'randomWordChoices', fallback: 5, unit: '' },
+  };
 
   // Plain-language explanations shown when you tap the ? next to a setting.
   const HELP = {
     rounds: 'How many times everyone gets to draw. Ten rounds with eight players is about 40 minutes.',
-    roundTime: 'How long the artist has per word. Time also shrinks once people start guessing right, so 90s rarely runs the full 90.',
-    wordChoices: 'How many words the artist picks from at the start of their turn. More choices means fewer "I can\'t draw that" moments.',
+    roundTime: 'How long the artist has per word. Time also shrinks once people start guessing right, so 90s rarely runs the full 90. Slide to the far right for 🎲 Random — a fresh clock every round, up to the number you had set.',
+    wordChoices: 'How many words the artist picks from at the start of their turn. More choices means fewer "I can\'t draw that" moments. Slide to the far right for 🎲 Random — a different number each turn, from two up to the number you had set.',
     hintCount: 'Letters revealed over the round, spread out evenly. Never more than half the word.',
     maxPlayers: 'Seat limit for the room, up to 50. Big rooms are fun but mean more waiting between your turns — past about 16 people, expect a long gap before you draw again.',
     autocorrectStrength: 'How forgiving guessing is. Off: exact spelling only. Easy: one typo on longer words, plurals forgiven. Normal: a typo on most words, two on long ones. Generous: pretty much anything close counts.',
@@ -1634,13 +1642,17 @@
     };
     dep('opt-lockComboParts', $('opt-combinations').checked);
     dep('opt-relayMode', $('opt-coopMode').checked);
-    // Random draw time means nothing when there is no clock to randomise.
-    dep('opt-randomRoundTime', Number($('opt-roundTime').value) > 0);
-    dep('opt-randomWordChoices', Number($('opt-wordChoices').value) > 0);
+    // Random draw time / word count live on their sliders now, so there is
+    // no checkbox left to gate here.
   }
   const AC_LABELS = ['Off', 'Easy', 'Normal', 'Generous'];
 
-  function optLabel(key, v) {
+  function optLabel(key, v, o) {
+    const R = RANDOM_STOP[key];
+    if (R && Number(v) === R.max) {
+      const ceil = (o && o[key] > 0) ? o[key] : R.fallback;
+      return `🎲 Random ≤${ceil}${R.unit}`;
+    }
     if (key === 'roundTime') return v + 's';
     if (key === 'autocorrectStrength') return AC_LABELS[v] || v;
     // 0 means something different for several of these, so say what it means.
@@ -1660,8 +1672,10 @@
       if (!input) continue;
       // Don't fight the host mid-drag — the echo would snap the thumb back.
       if (document.activeElement === input) continue;
-      input.value = String(o[key]);
-      $('opt-' + key + '-val').textContent = optLabel(key, o[key]);
+      const R = RANDOM_STOP[key];
+      const rolling = !!(R && o[R.flag] && o[key] > 0);
+      input.value = String(rolling ? R.max : o[key]);
+      $('opt-' + key + '-val').textContent = optLabel(key, rolling ? R.max : o[key], o);
     }
     for (const key of OPT_TOGGLES) {
       const input = $('opt-' + key);
@@ -5208,9 +5222,23 @@
       input.addEventListener('input', () => {
         markUiBusy();
         const v = parseInt(input.value, 10); // capture now — a stateUpdate echo may rewrite input.value
-        $('opt-' + key + '-val').textContent = optLabel(key, v);
+        const R = RANDOM_STOP[key];
+        let payload;
+        if (R && v === R.max) {
+          // Park on Random: keep the number already set as the ceiling, and
+          // fall back to the default if there is nothing sensible to roll to.
+          const cur = (gameState && gameState.options && gameState.options[key] > 0)
+            ? gameState.options[key] : R.fallback;
+          payload = { [R.flag]: true, [key]: cur };
+        } else if (R) {
+          payload = { [key]: v, [R.flag]: false };
+        } else {
+          payload = { [key]: v };
+        }
+        $('opt-' + key + '-val').textContent =
+          optLabel(key, v, R ? { ...(gameState && gameState.options), [key]: payload[key] } : null);
         clearTimeout(input._h);
-        input._h = setTimeout(() => socket.emit('setGameOptions', { options: { [key]: v } }), 200);
+        input._h = setTimeout(() => socket.emit('setGameOptions', { options: payload }), 200);
       });
     }
     for (const key of OPT_TOGGLES) {
