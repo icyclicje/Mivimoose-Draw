@@ -1996,3 +1996,163 @@ body.in-activity .btn-hero-sub { font-size: 0.74rem; }
   background: var(--card-2); border: 1px solid var(--line);
   border-radius: 99px; padding: 2px 9px; color: var(--ink-dim);
 }
+
+/* ══════════ Batch 23 — the game fills the screen ══════════ */
+
+/* Slimmer frame around the whole game screen. */
+body.in-game #main { padding: 6px 8px 8px; }
+@media (min-width: 1081px) {
+  body.in-game .game-grid { gap: 10px; }
+  body.in-game .game-top { margin-bottom: 8px; padding: 8px 14px; }
+}
+
+/* The canvas column centres its content in whatever height it has, so a
+   width-limited canvas floats mid-column instead of hugging the top. */
+body.in-game .canvas-card { justify-content: center; }
+
+/* The side panels stretch the full column height and scroll inside. */
+body.in-game .players-card { display: flex; flex-direction: column; }
+body.in-game .players-list { flex: 1; min-height: 0; overflow-y: auto; }
+body.in-game .chat-card { height: 100%; min-height: 0; }
+
+/* ══════════ Batch 23 — the game-options panel, redesigned ══════════ */
+
+/* Sliders become tidy little cards: name and value up top, the track under
+   them, everything aligned. */
+.opt {
+  background: var(--card-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  padding: 9px 12px 10px;
+  gap: 4px 10px;
+  transition: border-color .15s;
+}
+.opt:hover, .opt:focus-within { border-color: var(--brand); }
+.opt > label { font-size: 0.72rem; text-transform: uppercase; letter-spacing: .5px; }
+.opt > .opt-val {
+  background: var(--card);
+  border-radius: 99px;
+  padding: 1px 9px;
+  font-size: 0.78rem;
+  min-width: 0;
+}
+
+/* A track and thumb that look deliberate rather than default. */
+.opt > input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 6px;
+  border-radius: 99px;
+  background: var(--line);
+  accent-color: var(--brand);
+  margin-top: 4px;
+  cursor: pointer;
+}
+.opt > input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 17px; height: 17px; border-radius: 99px;
+  background: var(--grad);
+  border: 2.5px solid var(--card);
+  box-shadow: 0 1px 5px rgba(0, 0, 0, .3);
+  cursor: grab;
+}
+.opt > input[type="range"]:active::-webkit-slider-thumb { cursor: grabbing; transform: scale(1.12); }
+
+/* Sections read as grouped blocks, keyed by a brand tick on the left. */
+.opt-section {
+  border-top: none;
+  border-left: 3px solid var(--line);
+  padding: 2px 0 2px 12px;
+  margin-top: 14px;
+  border-radius: 2px;
+}
+.opt-section:first-of-type { margin-top: 12px; border-left-color: var(--line); padding-left: 12px; }
+.opt-section:hover { border-left-color: var(--brand); }
+.opt-section-title { margin-bottom: 9px; }
+
+/* Toggle rows: a hair tighter, clearer hover, and the switch always at a
+   consistent spot. */
+.opt-toggles { border-top: none; padding-top: 2px; }
+.toggle-row { border: 1px solid transparent; }
+.toggle-row:hover { border-color: var(--line); }
+
+/* The in-game settings modal: the two borrowed panels sit side by side on a
+   wide screen instead of one endless scroll. */
+#gamesettings-body { display: grid; gap: 16px; align-items: start; }
+@media (min-width: 1150px) {
+  #gamesettings-body { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+}
+#gamesettings-body .card { background: var(--card-2); border: 1px solid var(--line); box-shadow: none; padding: 14px; border-radius: var(--r-md); }
+#modal-gamesettings .modal { max-height: 88vh; overflow-y: auto; }
+
+/* ══════════ Batch 24 — the canvas owns the middle of the screen ══════════ */
+
+/* The toolbar sits at the very bottom of the screen; the canvas floats in
+   the space between the word bar and it, as large as 4:3 allows. */
+body.in-game .canvas-card { justify-content: flex-start; }
+body.in-game .canvas-card .canvas-frame { margin: auto; }
+
+/* A wider, flatter palette keeps the tool row shallow, so the height goes
+   to the canvas (45 colours in two rows instead of four). */
+@media (min-width: 1081px) {
+  body.in-game .palette { grid-template-columns: repeat(23, 20px); gap: 3px; }
+  body.in-game .palette .swatch { width: 20px; height: 20px; }
+}
+
+/* ══════════ Batch 25 — tighter panels, tools on the floor ══════════ */
+
+/* The toolbar hugs the bottom edge of the screen: less padding under the
+   game, less padding inside the canvas card, a slimmer gap above the bar. */
+body.in-game #main { padding: 4px 8px 4px; }
+body.in-game .canvas-card { gap: 6px; padding-bottom: 6px; }
+@media (min-width: 1081px) {
+  body.in-game .game-top { margin-bottom: 6px; }
+}
+
+/* ══════════ Batch 26 — the game IS the page ══════════ */
+
+/* In a game the site header steps aside and the layout takes the whole
+   viewport; the header's game controls live in the word bar instead. */
+body.in-game .topbar { display: none; }
+body.in-game #main { height: 100dvh; }
+
+.gt-actions { display: flex; gap: 6px; align-items: center; flex-shrink: 0; }
+.gt-code {
+  width: auto; padding: 0 11px;
+  font-family: 'Fredoka', sans-serif; font-weight: 600;
+  font-size: 0.85rem; letter-spacing: 2px;
+}
+
+/* Start Game sits inside the room card now, right under the invite row. */
+.room-card .btn-start { width: 100%; margin-top: 10px; }
+.room-card .waiting-msg { margin-top: 10px; }
+
+/* The public switch at the top of the in-game settings modal. */
+.gs-public { border: 1px solid var(--line); margin-bottom: 12px; }
+
+/* ══════════ Batch 27 — slim word bar, canvas low and huge, tools on the floor ══════════ */
+
+/* The word bar goes on a diet: smaller pills, shorter tiles, a smaller
+   timer. Every pixel it gives up lands in the canvas (fitCanvas measures
+   the real heights, so no numbers need to agree with these). */
+body.in-game .game-top { padding: 4px 12px; gap: 10px; margin-bottom: 4px; }
+body.in-game .round-pill { font-size: 0.78rem; padding: 4px 12px; }
+body.in-game .count-pill { font-size: 0.76rem; padding: 4px 11px 4px 9px; }
+body.in-game .word-wrap { min-height: 30px; gap: 2px; }
+body.in-game .tile { min-width: 21px; height: 26px; font-size: 0.95rem; border-radius: 5px; border-width: 1.5px; }
+body.in-game .tile-gap { width: 8px; }
+body.in-game .word-meta { font-size: 0.62rem; letter-spacing: .7px; }
+body.in-game .timer-wrap, body.in-game .timer-ring { width: 42px; height: 42px; }
+body.in-game .timer-num { font-size: 0.85rem; }
+body.in-game .gt-actions .icon-btn { width: 30px; height: 30px; border-radius: 9px; font-size: 0.9rem; }
+body.in-game .gt-code { width: auto; font-size: 0.78rem; }
+
+/* The canvas sits DOWN on the toolbar — any spare height collects above
+   it, under the word bar — and the toolbar sits on the bottom edge of the
+   screen with almost nothing beneath it. */
+body.in-game #main { padding: 2px 6px 2px; }
+body.in-game .canvas-card { padding: 4px 6px; gap: 4px; }
+body.in-game .canvas-card .canvas-frame { margin: auto auto 0; }
+@media (min-width: 1081px) {
+  body.in-game .game-grid { gap: 8px; }
+}

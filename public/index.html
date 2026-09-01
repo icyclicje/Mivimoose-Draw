@@ -151,6 +151,8 @@
             <button class="btn btn-small" id="btn-copy-invite">🔗 Invite link</button>
           </div>
           <button class="btn btn-small btn-alt btn-wide" id="btn-lobby-friends" style="display:none">👥 Invite friends</button>
+          <button class="btn btn-hero btn-start" id="btn-start" style="display:none">🚀 Start Game</button>
+          <p class="waiting-msg" id="waiting-msg">Waiting for the host to start…</p>
           <button class="btn btn-small btn-wide" id="btn-activity-custom" style="display:none">✨ Start a custom game</button>
           <button class="btn btn-small btn-alt btn-wide" id="btn-activity-back" style="display:none">🎮 Back to the channel game</button>
           <button class="btn btn-small btn-alt btn-wide" id="btn-lobby-gif" style="display:none">🎬 Save last game as a GIF</button>
@@ -332,8 +334,6 @@ t-shirt</pre>
           <div class="ro-grid" id="options-readonly-grid"></div>
         </div>
 
-        <button class="btn btn-hero btn-start" id="btn-start" style="display:none">🚀 Start Game</button>
-        <p class="waiting-msg" id="waiting-msg">Waiting for the host to start…</p>
       </div>
     </div>
   </section>
@@ -355,6 +355,13 @@ t-shirt</pre>
           <circle class="timer-ring-fg" id="timer-ring-fg" cx="22" cy="22" r="19"></circle>
         </svg>
         <span class="timer-num" id="timer-num">–</span>
+      </div>
+      <div class="gt-actions" id="gt-actions">
+        <button class="icon-btn gt-code" id="gt-code" title="Copy invite link">····</button>
+        <button class="icon-btn" id="gt-invite" title="Copy invite link">🔗</button>
+        <button class="icon-btn" id="gt-settings" title="Game settings" style="display:none">🎛️</button>
+        <button class="icon-btn" id="gt-endgame" title="End game" style="display:none">🏁</button>
+        <button class="icon-btn" id="gt-leave" title="Leave the game">🚪</button>
       </div>
     </div>
 
@@ -404,6 +411,11 @@ t-shirt</pre>
 
         <div class="toolbar" id="toolbar" style="display:none">
           <div class="tool-group">
+            <button class="tool-btn" id="btn-undo" title="Undo (Ctrl+Z)">↩️</button>
+            <button class="tool-btn" id="btn-clear" title="Clear all">🗑️</button>
+          </div>
+          <div class="tool-sep"></div>
+          <div class="tool-group">
             <button class="tool-btn active" data-tool="pen" title="Pen (B)">✏️</button>
             <button class="tool-btn" data-tool="eraser" title="Eraser (E)">🧽</button>
             <button class="tool-btn" data-tool="fill" title="Fill (G)">🪣</button>
@@ -419,11 +431,6 @@ t-shirt</pre>
           <div class="size-dots" id="size-dots"></div>
           <div class="tool-sep"></div>
           <div class="palette" id="palette"></div>
-          <div class="tool-sep"></div>
-          <div class="tool-group">
-            <button class="tool-btn" id="btn-undo" title="Undo (Ctrl+Z)">↩️</button>
-            <button class="tool-btn" id="btn-clear" title="Clear all">🗑️</button>
-          </div>
         </div>
       </div>
 
@@ -751,10 +758,14 @@ t-shirt</pre>
 </div>
 
 <div class="modal-backdrop" id="modal-gamesettings" style="display:none">
-  <div class="modal modal-lg">
+  <div class="modal modal-xl">
     <button class="modal-x" data-close="modal-gamesettings">✕</button>
     <h2>🎛️ Game settings</h2>
     <p class="modal-sub">Change things without stopping the game — most of it lands on the next round.</p>
+    <label class="toggle-row gs-public" id="gs-public-row">
+      <input type="checkbox" id="gs-toggle-public" class="switch" />
+      <span>List publicly<span class="toggle-hint">Anyone can find &amp; join this room, even mid-game</span></span>
+    </label>
     <div id="gamesettings-body"></div>
   </div>
 </div>
@@ -800,7 +811,7 @@ t-shirt</pre>
       <div class="set-row set-row-inline">
         <label for="set-scale">Interface size</label>
         <div class="set-inline">
-          <input type="range" id="set-scale" min="80" max="125" step="5" value="100" />
+          <input type="range" id="set-scale" min="70" max="125" step="5" value="100" />
           <span class="opt-val" id="set-scale-val">100%</span>
         </div>
       </div>

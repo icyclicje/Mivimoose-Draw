@@ -811,6 +811,7 @@
     $('room-pill').style.display = 'flex';
     $('btn-leave').style.display = 'inline-block';
     $('room-pill-code').textContent = code;
+    $('gt-code').textContent = code;
     syncHostGameButtons();
     $('home-error').textContent = '';
 
@@ -870,56 +871,88 @@
     }
     const card = $('canvas-card');
     const toolbar = $('toolbar');
-    const toolbarH = toolbar.style.display !== 'none' ? toolbar.offsetHeight + 12 : 0;
     const z = uiZoom();
-    const top = card.getBoundingClientRect().top;   // viewport (zoomed) px
-    const vh = (window.visualViewport && window.visualViewport.height) || window.innerHeight;
-    // Convert the viewport numbers into layout pixels so they can be
-    // compared with element sizes — CSS zoom scales the two apart.
-    const avail = (vh - top) / z - toolbarH - 10;
-    const byHeight = Math.floor(avail * 4 / 3);
-    const byWidth = card.clientWidth - 24;
-    const maxW = Math.max(320, Math.min(byHeight, byWidth || byHeight));
-    frame.style.setProperty('--canvas-max', maxW + 'px');
-    balanceGameGrid(maxW);
+    const cs = getComputedStyle(card);
+    const rowGap = parseFloat(cs.rowGap) || 10;
+
+    // Everything in the canvas column that is not the canvas itself: the
+    // card's padding and border, plus the toolbar / mode banner / finish
+    // button whenever they are shown.
+    let chrome = (parseFloat(cs.paddingTop) || 0) + (parseFloat(cs.paddingBottom) || 0) + 2;
+    for (const el of [$('mode-banner'), $('btn-finish-drawing'), toolbar]) {
+      if (el && el.style.display !== 'none' && el.offsetHeight) chrome += el.offsetHeight + rowGap;
+    }
+    const chromeX = (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0) + 2;
+
+    let availH;
+    if (window.innerWidth / z >= 1081) {
+      // On desktop the card runs from under the word bar to the bottom of
+      // the screen (the grid stretches it), so its own height is the whole
+      // budget — the canvas gets all of it minus the chrome.
+      availH = card.getBoundingClientRect().height / z - chrome;
+    } else {
+      // Stacked layouts size the card by its content, so asking the card
+      // would be circular — measure down from the viewport instead.
+      const top = card.getBoundingClientRect().top;   // viewport (zoomed) px
+      const vh = (window.visualViewport && window.visualViewport.height) || window.innerHeight;
+      availH = (vh - top) / z - chrome - 8;
+    }
+    const byHeight = Math.floor(Math.max(240, availH) * 4 / 3);
+
+    // Let the grid hand the middle column enough width for that height —
+    // squeezing the side panels toward their minimums if that is what it
+    // takes — then fit the canvas into whatever the column actually got.
+    const middle = balanceGameGrid(byHeight + chromeX);
+    const byWidth = (middle != null ? middle : card.clientWidth) - chromeX;
+    frame.style.setProperty('--canvas-max', Math.max(320, Math.min(byHeight, byWidth)) + 'px');
   }
 
-  // The canvas is locked to 4:3 (the drawing coordinate space is 1000x750),
-  // so on a wide window it runs out of height long before it runs out of
-  // width — which left a dead band either side of it. Rather than stretch
-  // the drawing, hand the leftover to the players list and the chat, which
-  // can always use more room.
-  const SIDE_BASE_PLAYERS = 208;
-  const SIDE_BASE_CHAT = 296;
-  const SIDE_MAX_PLAYERS = 330;
-  const SIDE_MAX_CHAT = 470;
+  // The canvas is locked to 4:3 (the drawing coordinate space is 1000x750)
+  // and it owns the middle of the screen: the middle column is sized FIRST,
+  // big enough for a canvas that runs from the word bar down to the toolbar,
+  // taking width back from the side panels when it must. Only what is left
+  // over goes to the players list and the chat.
+  const SIDE_MIN_PLAYERS = 160;
+  const SIDE_MIN_CHAT = 220;
+  const SIDE_BASE_PLAYERS = 200;
+  const SIDE_BASE_CHAT = 280;
+  const SIDE_MAX_PLAYERS = 260;
+  const SIDE_MAX_CHAT = 360;
 
-  function balanceGameGrid(canvasW) {
+  // Returns the middle column's width in layout px, or null when the grid
+  // is stacked / fullscreen and CSS is in charge.
+  function balanceGameGrid(needW) {
     const grid = $('game-grid');
-    if (!grid) return;
+    if (!grid) return null;
     // Narrow layouts stack, and fullscreen has its own rules — leave both be.
     if (window.innerWidth / uiZoom() < 1081 || document.body.classList.contains('focus-mode')) {
       grid.style.removeProperty('grid-template-columns');
-      return;
+      return null;
     }
     const total = grid.clientWidth;
-    if (!total) return;
+    if (!total) return null;
     const gap = parseFloat(getComputedStyle(grid).columnGap) || 12;
-    const cardChrome = 24;                       // .canvas-card padding + border
+    const usable = total - gap * 2;
 
-    // What the middle column actually needs. Reserving exactly this keeps
-    // the canvas the same size, so nothing oscillates between fits.
-    const need = Math.min(canvasW + cardChrome, total);
-    const spare = total - gap * 2 - SIDE_BASE_PLAYERS - SIDE_BASE_CHAT - need;
-    if (spare <= 8) {
-      grid.style.removeProperty('grid-template-columns');
-      return;
+    // The canvas column gets what it asked for, down to the panels' floor…
+    const middle = Math.max(320, Math.min(needW, usable - SIDE_MIN_PLAYERS - SIDE_MIN_CHAT));
+    const spare = usable - middle - SIDE_MIN_PLAYERS - SIDE_MIN_CHAT;
+
+    // …then the panels climb back toward their comfortable sizes — but
+    // both are capped now, so any width beyond that stays with the canvas
+    // column and becomes breathing room around the drawing.
+    let players = SIDE_MIN_PLAYERS + Math.min(SIDE_BASE_PLAYERS - SIDE_MIN_PLAYERS, spare * 0.45);
+    let chat = SIDE_MIN_CHAT + Math.min(SIDE_BASE_CHAT - SIDE_MIN_CHAT, spare * 0.55);
+    const left = spare - (players - SIDE_MIN_PLAYERS) - (chat - SIDE_MIN_CHAT);
+    if (left > 0) {
+      const growP = Math.min(Math.max(0, SIDE_MAX_PLAYERS - players), left * 0.4);
+      players += growP;
+      chat += Math.min(Math.max(0, SIDE_MAX_CHAT - chat), left - growP);
     }
-    // Chat earns the larger share — it is the part people actually read.
-    const players = Math.min(SIDE_MAX_PLAYERS, SIDE_BASE_PLAYERS + spare * 0.4);
-    const chat = Math.min(SIDE_MAX_CHAT, SIDE_BASE_CHAT + spare * 0.6);
-    grid.style.gridTemplateColumns =
-      `${Math.round(players)}px minmax(0, 1fr) ${Math.round(chat)}px`;
+    players = Math.round(players);
+    chat = Math.round(chat);
+    grid.style.gridTemplateColumns = `${players}px minmax(0, 1fr) ${chat}px`;
+    return usable - players - chat;
   }
 
   function resetGameGrid() {
@@ -956,6 +989,8 @@
     const playing = !!(s && s.state !== 'lobby');
     $('btn-endgame').style.display = (isHost && playing && s.state !== 'gameEnd') ? 'inline-block' : 'none';
     $('btn-gamesettings').style.display = (isHost && playing) ? 'flex' : 'none';
+    $('gt-endgame').style.display = (isHost && playing && s.state !== 'gameEnd') ? 'flex' : 'none';
+    $('gt-settings').style.display = (isHost && playing) ? 'flex' : 'none';
   }
 
   function refreshRoomUI() {
@@ -980,6 +1015,7 @@
     if (!settingsMoved || !gameState) return;
     if (Date.now() > uiBusyUntil) renderWordLists(gameState.wordLists);
     syncOptions(gameState.options);
+    $('gs-toggle-public').checked = !!gameState.public;
     renderDeviceLists();
   }
 
@@ -3455,11 +3491,11 @@
     return Number.isFinite(z) && z > 0 ? z : 1;
   }
 
-  // 100% browser zoom on a desktop was visibly oversized — 90% is the size
-  // the layout was actually designed at. First visit only; the slider wins
-  // after that.
+  // 100% browser zoom on a desktop was visibly oversized; 80% is where the
+  // whole site sits comfortably. First visit only; the slider wins after
+  // that.
   function defaultScale() {
-    return window.innerWidth >= 1100 ? 90 : 100;
+    return window.innerWidth >= 1100 ? 80 : 100;
   }
 
   function syncAudioUI() {
@@ -3511,6 +3547,7 @@
     renderWordLists(gameState.wordLists);
     syncOptions(gameState.options);
     renderMyLists();
+    $('gs-toggle-public').checked = !!gameState.public;
     $('modal-gamesettings').style.display = 'flex';
   }
 
@@ -4818,7 +4855,9 @@
     // 'dark' was the old id for what is now Midnight.
     const savedTheme = API.lsGet('mivi_theme');
     applyTheme(savedTheme === 'dark' ? 'midnight' : (savedTheme || DEFAULT_THEME));
-    const scale = parseInt(API.lsGet('mivi_scale'), 10) || defaultScale();
+    let scale = parseInt(API.lsGet('mivi_scale'), 10) || defaultScale();
+    if (scale === 90 && window.innerWidth >= 1100 && !API.lsGet('mivi_scale_v2')) scale = 80;
+    API.lsSet('mivi_scale_v2', '1');
     $('set-scale').value = scale;
     applyScale(scale);
     $('home-name').value = API.lsGet('mivi_name') || '';
@@ -4922,6 +4961,12 @@
     });
     $('btn-copy-invite').addEventListener('click', copyInvite);
     $('btn-invite-top').addEventListener('click', copyInvite);
+    $('gt-invite').addEventListener('click', copyInvite);
+    $('gt-code').addEventListener('click', copyInvite);
+    $('gt-leave').addEventListener('click', () => $('btn-leave').click());
+    $('gt-endgame').addEventListener('click', () => $('btn-endgame').click());
+    $('gt-settings').addEventListener('click', openGameSettings);
+    $('gs-toggle-public').addEventListener('change', (e) => socket.emit('setRoomPublic', { public: e.target.checked }));
     $('toggle-public').addEventListener('change', (e) => socket.emit('setRoomPublic', { public: e.target.checked }));
     $('btn-start').addEventListener('click', () => socket.emit('startGame'));
     $('lobby-chat-send').addEventListener('click', sendLobbyChat);
