@@ -1673,16 +1673,102 @@
   }
   const HINT_SPEED_LABELS = ['Late', 'Even', 'Early'];
 
+  // Send one slider's value — used by the slider itself and by typing a
+  // number straight into the box beside it.
+  function pushOptValue(key, v) {
+    const input = $('opt-' + key);
+    if (!input || !Number.isFinite(v)) return;
+    markUiBusy();
+    const R = RANDOM_STOP[key];
+    let payload;
+    if (R && v === R.max) {
+      // Park on Random: keep the number already set as the ceiling, and
+      // fall back to the default if there is nothing sensible to roll to.
+      const cur = (gameState && gameState.options && gameState.options[key] > 0)
+        ? gameState.options[key] : R.fallback;
+      payload = { [R.flag]: true, [key]: cur };
+    } else if (R) {
+      payload = { [key]: v, [R.flag]: false };
+    } else {
+      payload = { [key]: v };
+    }
+    $('opt-' + key + '-val').textContent =
+      optLabel(key, v, R ? { ...(gameState && gameState.options), [key]: payload[key] } : null);
+    clearTimeout(input._h);
+    input._h = setTimeout(() => socket.emit('setGameOptions', { options: payload }), 200);
+  }
+
+  // The settings that are a plain number you might want to type exactly.
+  // The word-picking ones read as names (Off / Easy / Late / Even), so a
+  // typed number there would mean nothing.
+  const TYPEABLE_OPTS = ['rounds', 'roundTime', 'pickTime', 'wordChoices', 'hintCount', 'maxPlayers', 'strokeLimit'];
+
+  // Click the value beside a slider to type an exact number. Sliders are
+  // quick but coarse; this is for "I want exactly 137 seconds".
+  function wireOptValueBox(key) {
+    if (!TYPEABLE_OPTS.includes(key)) return;
+    const box = $('opt-' + key + '-val');
+    const slider = $('opt-' + key);
+    if (!box || !slider) return;
+    box.classList.add('opt-val-typeable');
+    box.title = 'Click to type an exact number';
+    box.addEventListener('click', () => {
+      if (box._editing || slider.disabled) return;
+      box._editing = true;
+      markUiBusy(15000);
+
+      const R = RANDOM_STOP[key];
+      const lo = Number(slider.min) || 0;
+      // The Random stop is not a number anyone can type, so the top of the
+      // typeable range is the last real value below it.
+      const hi = R ? R.max - (Number(slider.step) || 1) : Number(slider.max);
+
+      const inp = document.createElement('input');
+      inp.type = 'text';
+      inp.inputMode = 'numeric';
+      inp.className = 'opt-val-input';
+      inp.value = String((gameState && gameState.options && gameState.options[key]) ?? slider.value);
+      inp.setAttribute('aria-label', key + ' value');
+
+      let done = false;
+      const finish = (save) => {
+        if (done) return;                 // blur fires again after Enter
+        done = true;
+        box._editing = false;
+        uiBusyUntil = 0;
+        const typed = parseInt(inp.value.replace(/[^0-9-]/g, ''), 10);
+        if (inp.parentNode) inp.replaceWith(box);
+        if (!save || !Number.isFinite(typed)) { if (gameState) syncOptions(gameState.options); return; }
+        const v = Math.max(lo, Math.min(hi, typed));
+        slider.value = String(v);
+        pushOptValue(key, v);
+        if (v !== typed) toast(`Kept it to ${v} — that is as far as this one goes.`);
+      };
+      inp.addEventListener('keydown', (e) => {
+        e.stopPropagation();
+        if (e.key === 'Enter') finish(true);
+        else if (e.key === 'Escape') finish(false);
+      });
+      inp.addEventListener('blur', () => finish(true));
+      box.replaceWith(inp);
+      inp.focus();
+      inp.select();
+    });
+  }
+
   function syncOptions(o) {
     for (const key of OPT_KEYS) {
       const input = $('opt-' + key);
       if (!input) continue;
       // Don't fight the host mid-drag — the echo would snap the thumb back.
       if (document.activeElement === input) continue;
+      // …nor mid-type: the value box is swapped for a text field just then.
+      const valEl = $('opt-' + key + '-val');
+      if (!valEl) continue;
       const R = RANDOM_STOP[key];
       const rolling = !!(R && o[R.flag] && o[key] > 0);
       input.value = String(rolling ? R.max : o[key]);
-      $('opt-' + key + '-val').textContent = optLabel(key, rolling ? R.max : o[key], o);
+      valEl.textContent = optLabel(key, rolling ? R.max : o[key], o);
     }
     for (const key of OPT_TOGGLES) {
       const input = $('opt-' + key);
@@ -5240,27 +5326,9 @@
     for (const key of OPT_KEYS) {
       const input = $('opt-' + key);
       if (!input) continue;
-      input.addEventListener('input', () => {
-        markUiBusy();
-        const v = parseInt(input.value, 10); // capture now — a stateUpdate echo may rewrite input.value
-        const R = RANDOM_STOP[key];
-        let payload;
-        if (R && v === R.max) {
-          // Park on Random: keep the number already set as the ceiling, and
-          // fall back to the default if there is nothing sensible to roll to.
-          const cur = (gameState && gameState.options && gameState.options[key] > 0)
-            ? gameState.options[key] : R.fallback;
-          payload = { [R.flag]: true, [key]: cur };
-        } else if (R) {
-          payload = { [key]: v, [R.flag]: false };
-        } else {
-          payload = { [key]: v };
-        }
-        $('opt-' + key + '-val').textContent =
-          optLabel(key, v, R ? { ...(gameState && gameState.options), [key]: payload[key] } : null);
-        clearTimeout(input._h);
-        input._h = setTimeout(() => socket.emit('setGameOptions', { options: payload }), 200);
-      });
+      // capture now — a stateUpdate echo may rewrite input.value
+      input.addEventListener('input', () => pushOptValue(key, parseInt(input.value, 10)));
+      wireOptValueBox(key);
     }
     for (const key of OPT_TOGGLES) {
       const input = $('opt-' + key);

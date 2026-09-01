@@ -2212,6 +2212,117 @@ async function main() {
         rollT({ options: { roundTime: 0, randomRoundTime: true } }) === 0);
     }
 
+    console.log('— typing an exact number into a setting —');
+    {
+      // A typed number goes straight to the server, so the range the box
+      // accepts has to be the range the server accepts. If someone widens a
+      // slider and forgets the clamp (or the other way round), say so here.
+      const path = require('path');
+      const html = fs.readFileSync(path.join(__dirname, '../public/index.html'), 'utf8');
+      const app = fs.readFileSync(path.join(__dirname, '../public/js/app.js'), 'utf8');
+      const game = fs.readFileSync(path.join(__dirname, '../lib/game.js'), 'utf8');
+
+      const attr = (chunk, name) => {
+        const m = chunk.indexOf(name + '="');
+        if (m < 0) return null;
+        const from = m + name.length + 2;
+        return Number(chunk.slice(from, chunk.indexOf('"', from)));
+      };
+      const sliderOf = (key) => {
+        const i = html.indexOf('id="opt-' + key + '"');
+        if (i < 0) return null;
+        const chunk = html.slice(i, html.indexOf('>', i));
+        return { min: attr(chunk, 'min'), max: attr(chunk, 'max'), step: attr(chunk, 'step') || 1 };
+      };
+      const clampOf = (key) => {
+        const i = game.indexOf('clampInt(options.' + key + ',');
+        if (i < 0) return null;
+        const args = game.slice(i + ('clampInt(options.' + key + ',').length, game.indexOf(')', i)).split(',');
+        return { lo: Number(args[0].trim()), hi: args[1].trim() };
+      };
+
+      const typeable = app.slice(app.indexOf('const TYPEABLE_OPTS = ['));
+      const list = typeable.slice(typeable.indexOf('[') + 1, typeable.indexOf(']'))
+        .split(',').map(x => x.trim().replace(/'/g, '')).filter(Boolean);
+      check('the typeable settings are the numeric ones', list.length >= 6, list.join(' '));
+
+      const randomStops = { roundTime: true, wordChoices: true };
+      const mismatches = [];
+      for (const key of list) {
+        const sl = sliderOf(key), cl = clampOf(key);
+        if (!sl || !cl) { mismatches.push(key + ':missing'); continue; }
+        // The Random stop is not a typeable number, so the top of the typed
+        // range is one step below the slider's maximum.
+        const typedMax = randomStops[key] ? sl.max - sl.step : sl.max;
+        const serverMax = /^[0-9]+$/.test(cl.hi) ? Number(cl.hi)
+          : (cl.hi === 'MAX_PLAYERS_LIMIT' ? 50 : NaN);
+        if (Number.isNaN(serverMax)) { mismatches.push(key + ':unknown-cap'); continue; }
+        if (typedMax !== serverMax) mismatches.push(key + ' box=' + typedMax + ' server=' + serverMax);
+        if (sl.min !== cl.lo) mismatches.push(key + ' min box=' + sl.min + ' server=' + cl.lo);
+      }
+      check('what you can type is what the server accepts', mismatches.length === 0, mismatches.join('; '));
+
+      // The label-based settings must stay out: a typed number would be
+      // meaningless against "Off / Easy / Normal" or "Late / Even / Early".
+      check('the named settings are not typeable',
+        !list.includes('autocorrectStrength') && !list.includes('hintSpeed'), list.join(' '));
+
+      // A typed value the slider cannot land on must still reach the server.
+      const rt = sliderOf('roundTime');
+      check('typing reaches values between slider steps', rt.step > 1, 'step ' + rt.step);
+    }
+
+    console.log('— the round-end drawing keeps its own shape —');
+    {
+      // The frame around the finished drawing must be the drawing's shape.
+      // It goes wrong when the box is given a width AND a separate height
+      // cap: the cap shortens the box, the width stays, and the picture
+      // letterboxes inside a frame bigger than itself.
+      const css = fs.readFileSync(require('path').join(__dirname, '../public/css/style.css'), 'utf8');
+      const blocks = [];
+      let at = 0;
+      for (;;) {
+        const i = css.indexOf('.re-image', at);
+        if (i < 0) break;
+        const open = css.indexOf('{', i);
+        const close = css.indexOf('}', open);
+        if (open < 0 || close < 0) break;
+        blocks.push(css.slice(open + 1, close));
+        at = close;
+      }
+      check('the round-end image is styled', blocks.length > 0, String(blocks.length));
+
+      // Whatever the cascade ends up doing, the LAST word on width must be
+      // "auto" — anything else re-creates the oversized frame.
+      const widths = [];
+      for (const b of blocks) {
+        for (const decl of b.split(';')) {
+          const [prop, val] = decl.split(':').map(x => (x || '').trim());
+          if (prop === 'width') widths.push(val);
+        }
+      }
+      check('nothing forces a width on the round-end image',
+        widths.length > 0 && widths[widths.length - 1] === 'auto', widths.join(' | '));
+
+      // Walk the whole cascade: what matters is the value each property
+      // ends up with, not which block happens to be last.
+      const finalOf = {};
+      for (const b of blocks) {
+        for (const decl of b.split(';')) {
+          const [prop, val] = decl.split(':').map(x => (x || '').trim());
+          if (prop) finalOf[prop] = val;
+        }
+      }
+      // Both caps present means the image fits inside them at its own ratio.
+      check('it is capped by width and height together',
+        !!finalOf['max-width'] && !!finalOf['max-height'],
+        JSON.stringify({ w: finalOf['max-width'], h: finalOf['max-height'] }));
+
+      // A flex-basis percentage would size it again — in a row by width, in
+      // the stacked column by height.
+      check('flex does not resize it', finalOf['flex'] === '0 1 auto', finalOf['flex']);
+    }
+
     console.log('— smart fill —');
     {
       const MiviFill = require('../public/js/fill.js');

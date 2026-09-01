@@ -2389,3 +2389,45 @@ body.in-game .palette { display: flex; flex-wrap: wrap; gap: 3px; justify-conten
   body.in-game .size-dot:hover { background: var(--card); transform: none; }
   body.in-game .size-dot.active { background: var(--brand-soft); border-color: var(--brand); }
 }
+
+/* ══════════ Batch 36 — type an exact number into a setting ══════════ */
+
+/* The value beside a slider is a button in disguise: click it and type. */
+.opt-val-typeable { cursor: text; border: 1px solid transparent; transition: border-color .15s, background .15s; }
+.opt-val-typeable:hover { border-color: var(--brand); background: var(--brand-soft); }
+
+.opt-val-input {
+  width: 74px; max-width: 100%;
+  background: var(--card); border: 2px solid var(--brand); border-radius: 99px;
+  padding: 1px 9px; color: var(--ink);
+  font-family: inherit; font-size: 0.78rem; font-weight: 800; text-align: center;
+  outline: none;
+}
+/* No spinner arrows — they fight the pill shape. */
+.opt-val-input::-webkit-outer-spin-button,
+.opt-val-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+
+/* ══════════ Batch 37 — the round-end frame hugs the drawing ══════════ */
+
+/* The box was being sized from its width while its height was capped
+   separately, so once the cap bit, the box grew wider than 4:3, the white
+   filler showed either side and the border traced a frame larger than the
+   picture. Let the image size itself instead: with both caps set and no
+   forced width, an <img> keeps its own proportions and fits inside them —
+   there is no leftover box to letterbox into. */
+.re-image {
+  /* In the stacked layout .re-body is a column, where a 60% flex-basis
+     would size the HEIGHT — another way to end up off-ratio. */
+  flex: 0 1 auto;
+  aspect-ratio: auto;
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  max-height: min(62vh, 620px);
+  object-fit: contain;
+  background: transparent;
+  display: block;
+}
+@media (min-width: 861px) {
+  .re-image { flex: 0 1 auto; max-width: 60%; }
+}
