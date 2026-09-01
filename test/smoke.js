@@ -2001,6 +2001,19 @@ async function main() {
     {
       let r = await rest('GET', '/auth/config');
       check('the config carries the version', /^Beta /.test(r.data.versionLabel || ''), JSON.stringify(r.data.versionLabel));
+      check('the version reads major.minor.patch', /^Beta \d+\.\d+\.\d+$/.test(r.data.versionLabel || ''), JSON.stringify(r.data.versionLabel));
+      {
+        // The rollover rule: the last number carries into the middle one at
+        // 9, and the middle one into the first.
+        const ver = require('../lib/version');
+        const seq = (start, n) => { let p = start, out = []; for (let i = 0; i < n; i++) { p = ver.bump(p); out.push(p.join('.')); } return out; };
+        check('a normal release bumps the last number', ver.bump([1, 2, 4]).join('.') === '1.2.5', ver.bump([1, 2, 4]).join('.'));
+        check('past nine it carries into the middle number', ver.bump([1, 2, 9]).join('.') === '1.3.0', ver.bump([1, 2, 9]).join('.'));
+        check('past nine again it carries into the first', ver.bump([1, 9, 9]).join('.') === '2.0.0', ver.bump([1, 9, 9]).join('.'));
+        check('the run is unbroken across a carry',
+          seq([1, 2, 7], 5).join(' ') === '1.2.8 1.2.9 1.3.0 1.3.1 1.3.2', seq([1, 2, 7], 5).join(' '));
+        check('the shipped version matches its own parts', ver.PARTS.join('.') === ver.VERSION);
+      }
 
       r = await rest('GET', '/leaderboard');
       check('the leaderboard is public', r.status === 200 && r.data.categories, JSON.stringify(r.status));
@@ -2074,6 +2087,86 @@ async function main() {
       check('a solo round rolls on to the next one', s2.state === 'drawing' || s2.state === 'choosing', s2.state);
       SM.disconnect();
       await sleep(200);
+    }
+
+    console.log('— renaming a list keeps every word —');
+    {
+      const hexk = () => Date.now().toString(16).padStart(16, '0') + Math.floor(Math.random() * 1e6).toString(16).padStart(8, '0');
+      const N = 4000;
+      const bigWords = Array.from({ length: N }, (_, i) => 'rw' + i);
+
+      const RH = connect({ guestKey: hexk(), name: 'Renamer' });
+      await once(RH, 'welcome');
+      let rp = once(RH, 'roomCreated');
+      RH.emit('createRoom', { name: 'Renamer', avatar: '🎨' });
+      await rp;
+
+      let up = once(RH, 'stateUpdate', 12000);
+      RH.emit('addCustomList', { name: 'BigList', text: bigWords.join('\n') });
+      const st1 = await up;
+      const before = st1.wordLists.available.find(l => l.name === 'BigList');
+      check('a big list is stored whole', before && before.count === N, before && String(before.count));
+
+      up = once(RH, 'stateUpdate', 12000);
+      RH.emit('renameCustomList', { name: 'BigList', newName: 'RenamedBig' });
+      const st2 = await up;
+      const after = st2.wordLists.available.find(l => l.name === 'RenamedBig');
+      check('renaming keeps every word', after && after.count === N, after && String(after.count));
+      check('renaming does not leave a second list',
+        !st2.wordLists.available.some(l => l.name === 'BigList'));
+
+      const back = once(RH, 'customListWords', 8000);
+      RH.emit('getCustomList', { name: 'RenamedBig' });
+      check('the renamed list reads back in full', (await back).words.length === N);
+      RH.disconnect();
+      await sleep(200);
+    }
+
+    console.log('— the device copy of a list is never a partial one —');
+    {
+      // Exercise the real functions out of app.js: a cached list is what
+      // gets re-added to the next room, so a truncated copy would quietly
+      // replace a big list with a short one.
+      const appSrc = fs.readFileSync(require('path').join(__dirname, '../public/js/app.js'), 'utf8');
+      const grab = (name) => {
+        const start = appSrc.indexOf('  function ' + name + '(');
+        if (start < 0) throw new Error('missing ' + name);
+        let i = appSrc.indexOf('{', start), depth = 0;
+        for (; i < appSrc.length; i++) {
+          if (appSrc[i] === '{') depth++;
+          else if (appSrc[i] === '}') { depth--; if (!depth) break; }
+        }
+        return appSrc.slice(start, i + 1);
+      };
+      const consts = appSrc.match(/const MY_LISTS_KEY = [^\n]+\n[\s\S]{0,200}?const MY_LIST_WORDS_MAX = [^\n]+/)[0];
+      let store = {};
+      const FakeAPI = {
+        lsGet: (k) => (k in store ? store[k] : null),
+        lsSet: (k, v) => { store[k] = v; },
+        lsTrySet: (k, v) => { if (v.length > 200 * 1024) return false; store[k] = v; return true; },
+      };
+      const mod = new Function('API', 'renderDeviceLists',
+        consts + '\n' + grab('deviceLists') + '\n' + grab('rememberList') + '\n' + grab('renameDeviceList') +
+        '\nreturn { deviceLists, rememberList, renameDeviceList };')(FakeAPI, () => {});
+
+      const mkw = (n) => Array.from({ length: n }, (_, i) => 'dw' + i);
+      mod.rememberList('BigList', mkw(5000));
+      let cached = mod.deviceLists().find(l => l.name === 'BigList');
+      check('a 5000-word list is cached whole', cached && cached.words.length === 5000, cached && String(cached.words.length));
+
+      mod.renameDeviceList('BigList', 'MyWords');
+      const all = mod.deviceLists();
+      check('the renamed device copy drops the old name', !all.some(l => l.name === 'BigList'));
+      cached = all.find(l => l.name === 'MyWords');
+      check('the renamed device copy keeps every word', cached && cached.words.length === 5000);
+      check('renaming leaves no duplicate device copy', all.length === 1, String(all.length));
+
+      // Too big for storage: cache nothing rather than half of it.
+      store = {};
+      mod.rememberList('Huge', mkw(60000));
+      const huge = mod.deviceLists().find(l => l.name === 'Huge');
+      check('a list that will not fit is skipped, not truncated',
+        !huge || huge.words.length === 60000, huge ? String(huge.words.length) : 'not cached');
     }
 
     console.log('— smart fill —');

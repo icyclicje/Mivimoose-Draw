@@ -2239,3 +2239,110 @@ body.in-game .palette { display: flex; flex-wrap: wrap; gap: 3px; justify-conten
   white-space: nowrap; flex-shrink: 0;
 }
 .wl-odds:empty { display: none; }
+
+/* ══════════ Batch 31 — nothing in a dialog leaves the screen ══════════ */
+
+/* Size dialogs against the measured viewport (set by syncViewportVars)
+   rather than vw/vh, which a zoomed page reports differently browser to
+   browser — that is what pushed the settings buttons off the edge. */
+:root { --vvw: 100vw; --vvh: 100vh; }
+.modal { max-height: calc(var(--vvh) * 0.92); }
+.modal-xl { max-width: 1080px; width: min(calc(var(--vvw) * 0.96), 1080px); }
+#modal-gamesettings .modal { max-height: calc(var(--vvh) * 0.88); }
+
+/* Rows of buttons wrap onto a second line instead of running off the side.
+   In the mid-game settings the panels sit in half the width they were
+   designed for, so these rows were always going to be too long. */
+.card-title-row { flex-wrap: wrap; gap: 8px; }
+.mini-btn-row { flex-wrap: wrap; justify-content: flex-end; }
+.wl-ai-row { flex-wrap: wrap; }
+.wl-ai-row > .input { min-width: 0; flex: 1 1 200px; }
+#gamesettings-body .card-title-row .card-title { flex: 1 1 auto; min-width: 0; }
+
+/* Nothing inside the settings modal may push it wider than it is. */
+#gamesettings-body, #gamesettings-body .card { min-width: 0; max-width: 100%; }
+#gamesettings-body .wl-grid, #gamesettings-body .opt-grid { min-width: 0; }
+
+/* ══════════ Batch 32 — one tidy toolbar line, with room to breathe ══════════ */
+
+@media (min-width: 1081px) {
+  /* One line, always. fitToolbar() picks the sizes below from the width the
+     canvas actually has, so the row never wraps and never overflows. */
+  body.in-game .canvas-card .toolbar {
+    flex-wrap: nowrap;
+    gap: var(--tb-gap, 12px);
+    padding: 8px var(--tb-pad, 16px);
+  }
+  body.in-game .toolbar > * { flex-shrink: 0; }
+
+  body.in-game .tool-btn {
+    width: var(--tb-btn, 38px); height: var(--tb-btn, 38px);
+    border-radius: 11px; font-size: 1.02rem;
+  }
+  body.in-game .tool-group { gap: var(--tb-gin, 6px); }
+  body.in-game .size-dots { gap: var(--tb-gin, 6px); }
+  body.in-game .size-dot { width: var(--tb-dot, 34px); height: var(--tb-dot, 34px); }
+  body.in-game .tool-sep { height: var(--tb-dot, 34px); }
+
+  /* A fixed grid, so the palette's shape is the same at every zoom. */
+  body.in-game .palette {
+    display: grid;
+    grid-template-columns: repeat(15, var(--sw, 22px));
+    gap: 4px;
+    flex: 0 0 auto;
+  }
+  body.in-game .palette .swatch {
+    width: var(--sw, 22px); height: var(--sw, 22px);
+    border-radius: 6px;
+  }
+}
+
+/* ══════════ Batch 33 — the round-end drawing, edge to edge ══════════ */
+
+/* The drawing space is 4:3, but the picture sat in a box whose shape came
+   from the layout — so "contain" letterboxed it, and the white filler read
+   as blank canvas around the drawing. Give the box the drawing's own shape
+   and the image fills it exactly. */
+.re-image { aspect-ratio: 4 / 3; height: auto; width: 100%; object-fit: contain; }
+@media (min-width: 861px) {
+  .re-image { flex: 1 1 60%; max-height: min(62vh, 620px); }
+}
+
+/* ══════════ Batch 34 — the pregame room card, tidied ══════════ */
+
+/* A `1fr` grid track will not shrink below its content, so a wide panel in
+   the right column pushed the whole lobby sideways and took the buttons off
+   the edge with it. minmax(0, 1fr) lets the track actually give. */
+.lobby-grid { grid-template-columns: 360px minmax(0, 1fr); }
+.lobby-grid.guest { grid-template-columns: 320px minmax(0, 1fr); }
+.lobby-left, .lobby-right { min-width: 0; }
+.lobby-left > *, .lobby-right > * { min-width: 0; }
+
+/* Copy code / Invite link share a row, wrap when they must, and are allowed
+   to shrink — flex items default to min-width:auto, which is what let them
+   run past the edge of the card. */
+.room-actions { flex-wrap: wrap; }
+.room-actions .btn { flex: 1 1 132px; min-width: 0; }
+
+/* Long labels wrap inside the button instead of overflowing it. */
+.room-card .btn { white-space: normal; overflow-wrap: anywhere; }
+.btn-wide { min-width: 0; }
+
+/* The optional buttons sit together as one block with an even rhythm,
+   rather than a ragged stack of margins that changes shape depending on
+   which of them happen to be showing. */
+.room-extra { display: grid; gap: 8px; }
+.room-extra:empty { display: none; }
+.room-extra .btn-wide { margin-top: 0; }
+
+/* Breathing room around the pieces of the card, in a consistent order. */
+.room-card .btn-start { margin-top: 12px; }
+.room-card .waiting-msg { margin: 10px 0 2px; }
+.room-card .room-public-row { margin-top: 12px; }
+
+/* The trailing letter-space pushed the code off-centre in its box. */
+.room-code { text-indent: 12px; }
+
+/* The odds pill is a button now — short, and it opens the breakdown. */
+.wl-odds { border: 1px solid transparent; cursor: pointer; font-family: inherit; }
+.wl-odds:hover { border-color: var(--brand); }

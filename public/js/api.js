@@ -7,6 +7,7 @@
 
   function lsGet(key) { try { return localStorage.getItem(key); } catch (e) { return null; } }
   function lsSet(key, val) { try { localStorage.setItem(key, val); } catch (e) {} }
+  function lsTrySet(key, val) { try { localStorage.setItem(key, val); return true; } catch (e) { return false; } }
   function lsDel(key) { try { localStorage.removeItem(key); } catch (e) {} }
 
   // Stable guest key so reconnects keep your seat even when signed out.
@@ -126,7 +127,7 @@
     guestKey,
     token,
     setToken,
-    lsGet, lsSet, lsDel,
+    lsGet, lsSet, lsTrySet, lsDel,
 
     authConfig: () => req('GET', '/auth/config'),
     beginDiscordLogin,

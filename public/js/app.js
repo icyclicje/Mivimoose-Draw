@@ -766,7 +766,6 @@
       sfx('save');
     });
 
-    socket.on('customListRenamed', ({ to }) => toast(`✏️ Renamed to "${to}"`));
     socket.on('customListRemoved', ({ name }) => {
       toast(`🗑️ Removed "${name}"`);
       uiBusyUntil = 0;                    // let the repaint through immediately
@@ -776,6 +775,9 @@
 
     socket.on('customListRenamed', ({ name, newName }) => {
       toast(`✏️ "${name}" is now "${newName}"`);
+      renameDeviceList(name, newName);
+      // The cached words are keyed by the old name too.
+      if (roomListCache[name]) { roomListCache[newName] = roomListCache[name]; delete roomListCache[name]; }
       uiBusyUntil = 0;
       refreshGameSettingsPanels();
       if (gameState && gameState.wordLists) renderWordLists(gameState.wordLists);
@@ -811,7 +813,6 @@
     $('room-pill').style.display = 'flex';
     $('btn-leave').style.display = 'inline-block';
     $('room-pill-code').textContent = code;
-    $('gt-code').textContent = code;
     syncHostGameButtons();
     $('home-error').textContent = '';
 
@@ -910,12 +911,111 @@
     // takes — then fit the canvas into whatever the column actually got.
     const middle = balanceGameGrid(byHeight + chromeX);
     const byWidth = (middle != null ? middle : card.clientWidth) - chromeX;
-    frame.style.setProperty('--canvas-max', Math.max(320, Math.min(byHeight, byWidth)) + 'px');
+    const canvasW = Math.max(320, Math.min(byHeight, byWidth));
+    frame.style.setProperty('--canvas-max', canvasW + 'px');
+    fitToolbar(canvasW);
 
     if (toolbar.style.display !== 'none') {
       const h0 = toolbar.offsetHeight;
       requestAnimationFrame(() => { if (toolbar.offsetHeight > h0) fitCanvas(); });
     }
+  }
+
+  // The 45 colours are three designed families of fifteen — darks, brights,
+  // pastels — so the palette keeps fifteen columns and the swatches take
+  // whatever width is left over. Sizing the swatches (rather than letting
+  // the row wrap) is what keeps the toolbar a single tidy line at every
+  // zoom: wrapping reflows the moment the available width crosses a swatch
+  // boundary, and zoom moves that boundary around.
+  // Everything in the toolbar is sized from one scale so the row always
+  // fits the canvas width — the drawing tools stay on a single line at any
+  // zoom, and they get as much room as there is to give. Wrapping was what
+  // made this jump about before: the row reflowed the moment the available
+  // width crossed a button boundary, and zoom moves that boundary.
+  const TB = {
+    btn: [24, 38],       // tool buttons: cramped .. roomy
+    dot: [22, 34],       // brush sizes
+    sw: [11, 26],        // colour swatches
+    gIn: [4, 6],         // gap inside a group
+    gTb: [8, 14],        // gap between groups
+    pad: [10, 16],       // toolbar side padding
+  };
+  // The 45 colours are three designed families of fifteen (darks, brights,
+  // pastels), so fifteen columns is the shape to keep. Narrower windows
+  // fall back to fewer columns and more rows rather than losing the line.
+  const PALETTE_COL_STEPS = [15, 12, 10, 9, 8, 6];
+  const PALETTE_GAP = 4;
+
+  function fitToolbar(canvasW) {
+    const toolbar = $('toolbar');
+    const palette = $('palette');
+    if (!toolbar || !palette) return;
+    // Stacked layouts have their own compact toolbar — leave it to the CSS.
+    if (toolbar.style.display === 'none' || window.innerWidth / uiZoom() < 1081) {
+      for (const k of ['--tb-btn', '--tb-dot', '--sw', '--tb-gin', '--tb-gap', '--tb-pad']) {
+        toolbar.style.removeProperty(k);
+      }
+      palette.style.removeProperty('grid-template-columns');
+      return;
+    }
+
+    // Count what is actually on show — the text, emoji and backdrop tools
+    // come and go with the room's settings.
+    let btns = 0;
+    toolbar.querySelectorAll('.tool-btn').forEach(b => { if (b.style.display !== 'none') btns++; });
+    const dots = toolbar.querySelectorAll('.size-dot').length || 6;
+    const groups = toolbar.querySelectorAll('.tool-group').length;
+    const seps = toolbar.querySelectorAll('.tool-sep').length;
+    const kids = groups + seps + 1;                  // + the palette
+    const at = ([lo, hi], t) => Math.round(lo + (hi - lo) * t);
+
+    const widthAt = (t, cols) => {
+      const rows = Math.ceil(45 / cols);
+      void rows;
+      return at(TB.pad, t) * 2 + 2
+        + btns * at(TB.btn, t) + Math.max(0, btns - groups) * at(TB.gIn, t)
+        + dots * at(TB.dot, t) + Math.max(0, dots - 1) * at(TB.gIn, t)
+        + seps
+        + cols * at(TB.sw, t) + (cols - 1) * PALETTE_GAP
+        + Math.max(0, kids - 1) * at(TB.gTb, t);
+    };
+
+    // Take the roomiest size that still fits on one line; only give up
+    // palette columns once the whole row is already at its tightest.
+    let best = null;
+    for (const cols of PALETTE_COL_STEPS) {
+      for (let t = 1; t >= 0; t -= 0.02) {
+        if (widthAt(t, cols) <= canvasW) { best = { t: Math.max(0, t), cols }; break; }
+      }
+      if (best) break;
+    }
+    // Nothing fitted even at its tightest (a small laptop zoomed right in):
+    // size the swatches from the space that is actually left, and let the
+    // palette scroll sideways if even that is not enough. The row of tools
+    // stays a row either way.
+    let squeezed = false;
+    if (!best) {
+      const cols = PALETTE_COL_STEPS[PALETTE_COL_STEPS.length - 1];
+      const spare = canvasW - widthAt(0, cols) + cols * at(TB.sw, 0) + (cols - 1) * PALETTE_GAP;
+      const sw = Math.floor((spare - (cols - 1) * PALETTE_GAP) / cols);
+      best = { t: 0, cols, sw: Math.max(8, sw) };
+      squeezed = true;
+    }
+
+    const { t, cols } = best;
+    toolbar.style.setProperty('--tb-btn', at(TB.btn, t) + 'px');
+    toolbar.style.setProperty('--tb-dot', at(TB.dot, t) + 'px');
+    toolbar.style.setProperty('--sw', (best.sw || at(TB.sw, t)) + 'px');
+    toolbar.style.setProperty('--tb-gin', at(TB.gIn, t) + 'px');
+    toolbar.style.setProperty('--tb-gap', at(TB.gTb, t) + 'px');
+    toolbar.style.setProperty('--tb-pad', at(TB.pad, t) + 'px');
+    palette.style.gridTemplateColumns = `repeat(${cols}, var(--sw, 22px))`;
+    // Only in the last-resort case (a small laptop zoomed right in) does the
+    // palette give up its fixed width: it compresses and scrolls sideways so
+    // the row of tools stays a row instead of spilling off the screen.
+    palette.style.overflowX = squeezed ? 'auto' : '';
+    palette.style.flex = squeezed ? '1 1 auto' : '';
+    palette.style.minWidth = squeezed ? '0' : '';
   }
 
   // The canvas is locked to 4:3 (the drawing coordinate space is 1000x750)
@@ -1257,8 +1357,10 @@
       meta.appendChild(el('span', 'cnt', info.count + (info.count === 1 ? ' word' : ' words')));
       // How often the next word comes from this list — filled in by
       // renderListOddsNow so it tracks the ticks and weights live.
-      const oddsPill = el('span', 'wl-odds');
+      const oddsPill = el('button', 'wl-odds');
+      oddsPill.type = 'button';
       oddsPill.dataset.list = info.name;
+      oddsPill.onclick = (e) => { e.preventDefault(); e.stopPropagation(); toggleListOdds(); };
       meta.appendChild(oddsPill);
       const actions = el('span', 'wl-actions');
       // Your own contribution (or a built-in) opens for reading; a list a
@@ -1385,6 +1487,18 @@
     oddsFrame = requestAnimationFrame(() => { oddsFrame = null; renderListOddsNow(); });
   }
 
+  // Show or hide the odds breakdown. The word-count pills open it too, so
+  // the pill itself can stay as short as a percentage.
+  function toggleListOdds(force) {
+    const box = $('list-odds');
+    if (!box) return;
+    const show = force === undefined ? box.style.display === 'none' : !!force;
+    box.style.display = show ? 'flex' : 'none';
+    const btn = $('btn-list-odds');
+    if (btn) btn.textContent = show ? 'ℹ️ Hide odds' : 'ℹ️ Odds';
+    if (show) renderListOdds();
+  }
+
   // 12.5% reads better than 13% at the low end, and 40% better than 40.0%.
   function fmtPct(pct) {
     return pct.toFixed(pct < 10 ? 1 : 0) + '%';
@@ -1406,8 +1520,8 @@
     document.querySelectorAll('#wl-grid .wl-odds').forEach(pill => {
       const pct = share[pill.dataset.list];
       if (pct === undefined) { pill.textContent = ''; pill.title = ''; return; }
-      pill.textContent = fmtPct(pct) + ' chance';
-      pill.title = 'How often the next word comes from this list. Its weight sets this — the number of words in it does not.';
+      pill.textContent = fmtPct(pct);
+      pill.title = 'How often the next word comes from this list — click for the full breakdown. Its weight sets this, not how many words are in it.';
     });
 
     const box = $('list-odds');
@@ -3530,6 +3644,19 @@
     document.body.style.zoom = String(v / 100);
     $('set-scale-val').textContent = v + '%';
     API.lsSet('mivi_scale', String(v));
+    syncViewportVars();
+  }
+
+  // The viewport in LAYOUT pixels, published for CSS. Under body zoom a
+  // browser may or may not scale vw/vh, so anything sized off them can end
+  // up wider than the screen — which is how modal buttons went off the edge.
+  function syncViewportVars() {
+    const z = uiZoom();
+    const vw = ((window.visualViewport && window.visualViewport.width) || window.innerWidth) / z;
+    const vh = ((window.visualViewport && window.visualViewport.height) || window.innerHeight) / z;
+    const root = document.documentElement.style;
+    root.setProperty('--vvw', Math.floor(vw) + 'px');
+    root.setProperty('--vvh', Math.floor(vh) + 'px');
   }
 
   function uiZoom() {
@@ -3617,7 +3744,7 @@
   const MY_LISTS_KEY = 'mivi_device_lists';
   const MY_OPTS_KEY = 'mivi_device_options';
   const MY_LISTS_MAX = 40;
-  const MY_LIST_WORDS_MAX = 3000;
+  const MY_LIST_WORDS_MAX = 50000;   // the server's cap — effectively unlimited
 
   function deviceLists() {
     try {
@@ -3628,12 +3755,37 @@
 
   function rememberList(name, words) {
     if (!name || !Array.isArray(words) || !words.length) return;
-    try {
-      const all = deviceLists().filter(l => l.name.toLowerCase() !== String(name).toLowerCase());
-      all.unshift({ name: String(name).slice(0, 40), words: words.slice(0, MY_LIST_WORDS_MAX), at: Date.now() });
-      API.lsSet(MY_LISTS_KEY, JSON.stringify(all.slice(0, MY_LISTS_MAX)));
-      renderDeviceLists();
-    } catch (e) { /* storage full or blocked — not worth interrupting a game */ }
+    const entry = {
+      name: String(name).slice(0, 40),
+      words: words.slice(0, MY_LIST_WORDS_MAX),
+      at: Date.now(),
+    };
+    let all = deviceLists().filter(l => l.name.toLowerCase() !== entry.name.toLowerCase());
+    all.unshift(entry);
+    all = all.slice(0, MY_LISTS_MAX);
+    // Never keep half a list: a partial copy would quietly re-add a shorter
+    // version of the list to the next room. If it will not fit, let go of
+    // the oldest cached lists, and if it still will not fit, cache nothing.
+    while (all.length) {
+      if (API.lsTrySet(MY_LISTS_KEY, JSON.stringify(all))) { renderDeviceLists(); return; }
+      if (all.length === 1) break;
+      all.pop();
+    }
+  }
+
+  // A room list that gets renamed must not leave its old name behind on the
+  // device: the stale copy is no longer in the room, so it comes back as a
+  // clickable chip and re-adds the list a second time under the old name.
+  function renameDeviceList(from, to) {
+    if (!from || !to) return;
+    const all = deviceLists();
+    const hit = all.find(l => l.name.toLowerCase() === String(from).toLowerCase());
+    if (!hit) return;
+    const clash = String(to).toLowerCase();
+    const kept = all.filter(l => l === hit || l.name.toLowerCase() !== clash);
+    hit.name = String(to).slice(0, 40);
+    API.lsTrySet(MY_LISTS_KEY, JSON.stringify(kept));
+    renderDeviceLists();
   }
 
   function forgetList(name) {
@@ -5010,7 +5162,6 @@
     $('btn-copy-invite').addEventListener('click', copyInvite);
     $('btn-invite-top').addEventListener('click', copyInvite);
     $('gt-invite').addEventListener('click', copyInvite);
-    $('gt-code').addEventListener('click', copyInvite);
     $('gt-leave').addEventListener('click', () => $('btn-leave').click());
     $('gt-endgame').addEventListener('click', () => $('btn-endgame').click());
     $('gt-settings').addEventListener('click', openGameSettings);
@@ -5152,13 +5303,7 @@
     $('set-scale').addEventListener('input', e => applyScale(parseInt(e.target.value, 10)));
 
     // ── List odds (lobby) ──
-    $('btn-list-odds').addEventListener('click', () => {
-      const box = $('list-odds');
-      const show = box.style.display === 'none';
-      box.style.display = show ? 'flex' : 'none';
-      $('btn-list-odds').textContent = show ? 'ℹ️ Hide odds' : 'ℹ️ Odds';
-      if (show) renderListOdds();
-    });
+    $('btn-list-odds').addEventListener('click', () => toggleListOdds());
 
     $('btn-zip-lists').addEventListener('click', () => {
       const btn = $('btn-zip-lists');
@@ -5395,7 +5540,8 @@
       if (e.target === $('modal-gamesettings')) closeGameSettings();
     });
     $('modal-gamesettings').querySelector('.modal-x').addEventListener('click', closeGameSettings);
-    window.addEventListener('resize', () => requestAnimationFrame(fitCanvas));
+    window.addEventListener('resize', () => requestAnimationFrame(() => { syncViewportVars(); fitCanvas(); }));
+    syncViewportVars();
     $('btn-lobby-friends').addEventListener('click', () => window.MiviAccount.openAccount('friends'));
     $('invite-join').addEventListener('click', acceptInvite);
     $('invite-dismiss').addEventListener('click', hideInviteToast);

@@ -153,9 +153,11 @@
           <button class="btn btn-small btn-alt btn-wide" id="btn-lobby-friends" style="display:none">👥 Invite friends</button>
           <button class="btn btn-hero btn-start" id="btn-start" style="display:none">🚀 Start Game</button>
           <p class="waiting-msg" id="waiting-msg">Waiting for the host to start…</p>
-          <button class="btn btn-small btn-wide" id="btn-activity-custom" style="display:none">✨ Start a custom game</button>
-          <button class="btn btn-small btn-alt btn-wide" id="btn-activity-back" style="display:none">🎮 Back to the channel game</button>
-          <button class="btn btn-small btn-alt btn-wide" id="btn-lobby-gif" style="display:none">🎬 Save last game as a GIF</button>
+          <div class="room-extra">
+            <button class="btn btn-small btn-wide" id="btn-activity-custom" style="display:none">✨ Start a custom game</button>
+            <button class="btn btn-small btn-alt btn-wide" id="btn-activity-back" style="display:none">🎮 Back to the channel game</button>
+            <button class="btn btn-small btn-alt btn-wide" id="btn-lobby-gif" style="display:none">🎬 Save last game as a GIF</button>
+          </div>
           <label class="toggle-row room-public-row" id="public-toggle-row" style="display:none">
             <input type="checkbox" id="toggle-public" class="switch" />
             <span>List publicly<span class="toggle-hint">Anyone can find &amp; join this room</span></span>
@@ -362,7 +364,6 @@ t-shirt</pre>
       <aside class="card players-card" id="players-card">
         <div class="card-title-row">
           <div class="card-title">Players</div>
-          <button class="icon-btn gt-code" id="gt-code" title="Copy invite link">····</button>
         </div>
         <div class="players-list" id="players-list"></div>
         <div class="pc-actions">
