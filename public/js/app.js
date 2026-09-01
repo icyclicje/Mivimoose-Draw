@@ -859,8 +859,10 @@
   // height — wide screens no longer get a canvas that runs off the bottom.
   function fitCanvas() {
     const frame = $('canvas-frame');
+    const main = $('main');
     if (!$('screen-game').classList.contains('active')) {
       frame.style.removeProperty('--canvas-max');
+      main.style.removeProperty('height');
       return;
     }
     // In fullscreen the flex/aspect-ratio rules already size the canvas to
@@ -872,6 +874,10 @@
     const card = $('canvas-card');
     const toolbar = $('toolbar');
     const z = uiZoom();
+    // Pin the page height in real pixels: 100dvh inside a zoomed body is
+    // browser-dependent, and it kept leaving a dead band at the bottom.
+    const vhL = ((window.visualViewport && window.visualViewport.height) || window.innerHeight) / z;
+    main.style.height = Math.floor(vhL) + 'px';
     const cs = getComputedStyle(card);
     const rowGap = parseFloat(cs.rowGap) || 10;
 
@@ -905,6 +911,11 @@
     const middle = balanceGameGrid(byHeight + chromeX);
     const byWidth = (middle != null ? middle : card.clientWidth) - chromeX;
     frame.style.setProperty('--canvas-max', Math.max(320, Math.min(byHeight, byWidth)) + 'px');
+
+    if (toolbar.style.display !== 'none') {
+      const h0 = toolbar.offsetHeight;
+      requestAnimationFrame(() => { if (toolbar.offsetHeight > h0) fitCanvas(); });
+    }
   }
 
   // The canvas is locked to 4:3 (the drawing coordinate space is 1000x750)
@@ -2372,7 +2383,7 @@
       ctx.textAlign = 'left';
       ctx.fillText(String(d.text || '').slice(0, 40), d.x, d.y);
     } else if (d.type === 'fill') {
-      fillAt(ctx, Math.round(d.x * CANVAS_SCALE), Math.round(d.y * CANVAS_SCALE), d.color);
+      fillAt(ctx, d.x, d.y, d.color);
     } else if (d.type === 'rect') {
       ctx.beginPath();
       ctx.strokeStyle = d.color; ctx.lineWidth = d.size; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
@@ -2403,16 +2414,23 @@
 
   // The good fill (anti-alias aware, scanline) lives in fill.js; this keeps
   // working if that file ever fails to load.
+  //
+  // x/y are drawing coordinates (the 1000x750 space), the same as every
+  // other draw helper. The pixel routines below read the backing store, so
+  // they need device pixels — converting here, once, keeps the artist's own
+  // click and the replayed event landing on the same spot.
   function fillAt(targetCtx, x, y, hex) {
+    const dx = Math.round(x * CANVAS_SCALE);
+    const dy = Math.round(y * CANVAS_SCALE);
     if (window.MiviFill && window.MiviFill.smartFill) {
       // Generous: a wider tolerance for anti-aliased edges, and gaps up to
       // ~7 canvas pixels get sealed instead of flooding the page.
-      return window.MiviFill.smartFill(targetCtx, x, y, hex, { tolerance: 40, seal: 7 * CANVAS_SCALE });
+      return window.MiviFill.smartFill(targetCtx, dx, dy, hex, { tolerance: 40, seal: 7 * CANVAS_SCALE });
     }
     if (window.MiviFill && window.MiviFill.floodFill) {
-      return window.MiviFill.floodFill(targetCtx, x, y, hex, { tolerance: 40 });
+      return window.MiviFill.floodFill(targetCtx, dx, dy, hex, { tolerance: 40 });
     }
-    return floodFill(targetCtx, x, y, hex);
+    return floodFill(targetCtx, dx, dy, hex);
   }
 
   function floodFill(targetCtx, startX, startY, fillHex) {
@@ -3495,7 +3513,7 @@
   // whole site sits comfortably. First visit only; the slider wins after
   // that.
   function defaultScale() {
-    return window.innerWidth >= 1100 ? 80 : 100;
+    return window.innerWidth >= 1100 ? 85 : 100;
   }
 
   function syncAudioUI() {
@@ -4858,6 +4876,8 @@
     let scale = parseInt(API.lsGet('mivi_scale'), 10) || defaultScale();
     if (scale === 90 && window.innerWidth >= 1100 && !API.lsGet('mivi_scale_v2')) scale = 80;
     API.lsSet('mivi_scale_v2', '1');
+    if (scale === 80 && window.innerWidth >= 1100 && !API.lsGet('mivi_scale_v3')) scale = 85;
+    API.lsSet('mivi_scale_v3', '1');
     $('set-scale').value = scale;
     applyScale(scale);
     $('home-name').value = API.lsGet('mivi_name') || '';

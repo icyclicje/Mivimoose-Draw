@@ -11,8 +11,18 @@ const path = require('path');
 const PORT = process.env.SMOKE_PORT || 3111;
 const BASE = `http://localhost:${PORT}`;
 
+const fs = require('fs');
 let pass = 0, fail = 0;
 const failures = [];
+
+// An un-awaited once() promise used to kill the run outright, at whichever
+// section its timer happened to fire in — which made it look like a random
+// flake. Record it as a real failure instead.
+process.on('unhandledRejection', (err) => {
+  fail++;
+  failures.push('UNHANDLED: ' + ((err && err.message) || err) + ' (an orphaned once() promise — nothing awaited it)');
+  console.log('  ✘ UNHANDLED: ' + ((err && err.message) || err));
+});
 function check(name, cond, extra) {
   if (cond) { pass++; console.log(`  ✔ ${name}`); }
   else { fail++; failures.push(name); console.log(`  ✘ ${name}${extra ? ' — ' + extra : ''}`); }
@@ -574,7 +584,6 @@ async function main() {
     check('host skips the round they are drawing', true);
 
     // Backdrop resets when the next round starts.
-    wcSC = once(SG, 'wordChoices', 15000);
     const rsNext = await once(SG, 'roundStart', 15000);
     check('backdrop cleared for the next round', rsNext.scene === null || rsNext.scene === undefined);
     SC.disconnect(); SG.disconnect();
@@ -1985,6 +1994,53 @@ async function main() {
     {
       const MiviFill = require('../public/js/fill.js');
       check('smartFill ships alongside floodFill', typeof MiviFill.smartFill === 'function' && typeof MiviFill.floodFill === 'function');
+
+      // The backing store is 2x, and getImageData works in DEVICE pixels
+      // regardless of the ctx transform — so a fill point must be scaled.
+      // The artist's own click once skipped that while the replayed event
+      // did not, so the drawer flooded the background while everyone else
+      // saw the object filled.
+      const SC = 2;
+      const W = 400 * SC, H = 300 * SC;
+      const mkCtx = () => {
+        const data = new Uint8ClampedArray(W * H * 4).fill(255);
+        return {
+          canvas: { width: W, height: H },
+          getImageData: () => ({ data, width: W, height: H }),
+          putImageData: () => {},
+          _d: data,
+        };
+      };
+      const at = (c, x, y) => { const i = (y * W + x) * 4; return c._d[i] + ',' + c._d[i + 1] + ',' + c._d[i + 2]; };
+      // A closed box at drawing coords (200,120)-(320,220).
+      const box = (c) => {
+        const x1 = 200 * SC, y1 = 120 * SC, x2 = 320 * SC, y2 = 220 * SC;
+        const ink = (x, y) => { const i = (y * W + x) * 4; c._d[i] = c._d[i + 1] = c._d[i + 2] = 0; };
+        for (let t = 0; t < 6; t++) {
+          for (let x = x1; x <= x2; x++) { ink(x, y1 + t); ink(x, y2 - t); }
+          for (let y = y1; y <= y2; y++) { ink(x1 + t, y); ink(x2 - t, y); }
+        }
+      };
+      const click = { x: 260, y: 170 };   // drawing coords, inside the box
+
+      const good = mkCtx(); box(good);
+      MiviFill.smartFill(good, click.x * SC, click.y * SC, '#ff0000', { tolerance: 40, seal: 7 * SC });
+      check('a fill scaled to device pixels lands inside the shape',
+        at(good, click.x * SC, click.y * SC) === '255,0,0', at(good, click.x * SC, click.y * SC));
+      check('...and leaves the background alone', at(good, 20, 20) === '255,255,255', at(good, 20, 20));
+
+      // The bug, pinned: unscaled coordinates miss the shape entirely.
+      const bad = mkCtx(); box(bad);
+      MiviFill.smartFill(bad, click.x, click.y, '#ff0000', { tolerance: 40, seal: 7 * SC });
+      check('unscaled coordinates would flood the background (the old bug)',
+        at(bad, 20, 20) === '255,0,0' && at(bad, click.x * SC, click.y * SC) !== '255,0,0');
+
+      // Both call sites in app.js must hand fillAt drawing coordinates, so
+      // the artist and the replay can never disagree again.
+      const appSrc = fs.readFileSync(require('path').join(__dirname, '../public/js/app.js'), 'utf8');
+      const calls = appSrc.match(/fillAt\(ctx,[^)]*\)/g) || [];
+      check('every fillAt call passes drawing coordinates', calls.length === 2 && calls.every(c => !/CANVAS_SCALE/.test(c)), JSON.stringify(calls));
+      check('fillAt converts to device pixels itself', /function fillAt[\s\S]{0,320}x \* CANVAS_SCALE/.test(appSrc));
     }
   } catch (e) {
     fail++;

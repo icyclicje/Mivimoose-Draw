@@ -2156,3 +2156,55 @@ body.in-game .canvas-card .canvas-frame { margin: auto auto 0; }
 @media (min-width: 1081px) {
   body.in-game .game-grid { gap: 8px; }
 }
+
+/* ══════════ Batch 28 — a cleaner game screen ══════════ */
+
+/* The word bar floats free: no card box, just the pills, the tiles and the
+   timer on the page background. */
+body.in-game .game-top { background: transparent; border: none; box-shadow: none; padding: 2px 4px; margin-bottom: 4px; }
+body.in-game .word-meta { min-height: 0; }
+
+/* The canvas stands on its own — the box around it is gone, and every
+   pixel the card chrome used to take goes to the drawing. The toolbar
+   becomes a floating pill resting on the bottom edge of the screen. */
+body.in-game .canvas-card { padding: 0; background: transparent; border: none; box-shadow: none; gap: 6px; }
+body.in-game .canvas-card .toolbar {
+  width: auto; max-width: 100%;
+  background: var(--card); border: 1px solid var(--line);
+  border-radius: 14px; padding: 6px 10px;
+  box-shadow: var(--shadow-sm);
+}
+body.in-game .toolbar { gap: 8px; }
+body.in-game .tool-btn { width: 34px; height: 34px; border-radius: 9px; font-size: 0.95rem; }
+body.in-game .size-dot { width: 30px; height: 30px; }
+
+/* Room controls live in the players column now: the code up top, the
+   actions in one even row pinned at the bottom. */
+.pc-actions { display: flex; gap: 6px; margin-top: 8px; flex-shrink: 0; }
+.pc-actions .icon-btn { flex: 1; width: auto; height: 32px; border-radius: 10px; font-size: 0.95rem; }
+.players-card .gt-code {
+  width: auto; height: 30px; padding: 0 10px;
+  font-family: 'Fredoka', sans-serif; font-weight: 600;
+  font-size: 0.8rem; letter-spacing: 1.5px;
+}
+
+/* ══════════ Batch 29 — pinned to the bottom edge, calmer top bar ══════════ */
+
+/* Nothing scrolls during a game. The page height is pinned from JS in real
+   pixels (fitCanvas), so the canvas and both side columns land exactly on
+   the bottom of the screen. */
+body.in-game { overflow: hidden; }
+
+/* The word bar sizes back up a notch — the slim pass overshot. */
+body.in-game .game-top { padding: 4px 6px; gap: 12px; margin-bottom: 6px; }
+body.in-game .round-pill { font-size: 0.85rem; padding: 5px 14px; }
+body.in-game .count-pill { font-size: 0.82rem; padding: 5px 12px 5px 10px; }
+body.in-game .word-wrap { min-height: 36px; }
+body.in-game .tile { min-width: 24px; height: 30px; font-size: 1.05rem; border-radius: 6px; }
+body.in-game .word-meta { font-size: 0.68rem; }
+body.in-game .timer-wrap, body.in-game .timer-ring { width: 48px; height: 48px; }
+body.in-game .timer-num { font-size: 0.95rem; }
+
+/* The colours can never leave the screen again: the palette wraps to the
+   width it actually has instead of demanding 23 rigid columns. */
+body.in-game .palette { display: flex; flex-wrap: wrap; gap: 3px; justify-content: center; max-width: 560px; min-width: 0; }
