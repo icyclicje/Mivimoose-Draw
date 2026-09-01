@@ -327,6 +327,21 @@
       playTone({ delay: 0.03, freq: 2489, type: 'sine', peak: 0.035, attack: 0.002, dur: 0.2 });
     },
 
+    // Wet paint setting: a soft papery whisper as the dry line creeps
+    // along. Quiet and airy on purpose — it fires several times a round.
+    drying: function () {
+      playNoise({ dur: 0.55, peak: 0.042, attack: 0.09,
+                  filter: { type: 'bandpass', freq: 820, endFreq: 2200, q: 0.9 } });
+      playTone({ freq: 208, type: 'sine', peak: 0.016, attack: 0.12, dur: 0.5 });
+    },
+
+    // The dry line starting to move — one clearer brush sweep.
+    dryStart: function () {
+      playNoise({ dur: 0.7, peak: 0.075, attack: 0.06,
+                  filter: { type: 'bandpass', freq: 600, endFreq: 2600, q: 0.8 } });
+      playTone({ freq: 330, type: 'triangle', peak: 0.03, attack: 0.05, dur: 0.6 });
+    },
+
     // Soft glassy ding.
     hint: function () {
       playTone({ freq: 1318.5, type: 'sine', peak: 0.08, attack: 0.002, dur: 0.7 });

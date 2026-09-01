@@ -2346,3 +2346,46 @@ body.in-game .palette { display: flex; flex-wrap: wrap; gap: 3px; justify-conten
 /* The odds pill is a button now — short, and it opens the breakdown. */
 .wl-odds { border: 1px solid transparent; cursor: pointer; font-family: inherit; }
 .wl-odds:hover { border-color: var(--brand); }
+
+/* ══════════ Batch 35 — the word-list box, and a cleaner tool bar ══════════ */
+
+/* The odds pill made this row too long for a 240px card and the trash button
+   fell off the end (the card clips its overflow). Let the row wrap instead:
+   the actions drop to their own line and stay right-aligned. */
+.wl-meta { flex-wrap: wrap; row-gap: 6px; }
+.wl-meta .cnt { min-width: 0; }
+.wl-actions { margin-left: auto; flex-wrap: wrap; justify-content: flex-end; }
+
+/* ── The drawing tools, rebuilt ──
+   Four chips on one bar — tools, brush sizes, undo/clear, colours — spread
+   across a bar exactly as wide as the drawing above it. The hairline
+   separators are gone; the chips group things far more clearly. */
+@media (min-width: 1081px) {
+  body.in-game .canvas-card .toolbar {
+    justify-content: space-between;
+    align-items: center;
+    margin: 0 auto;
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    box-shadow: var(--shadow-sm);
+  }
+  body.in-game .canvas-card .toolbar .tool-sep { display: none; }
+
+  body.in-game .toolbar > .tool-group,
+  body.in-game .toolbar > .size-dots,
+  body.in-game .toolbar > .palette {
+    background: var(--card-2);
+    border-radius: 12px;
+    padding: 6px var(--tb-chip, 12px);
+  }
+  body.in-game .toolbar > .palette { padding-top: 6px; padding-bottom: 6px; }
+
+  /* The active tool reads clearly against the chip behind it. */
+  body.in-game .tool-btn { background: transparent; }
+  body.in-game .tool-btn:hover { background: var(--card); transform: none; }
+  body.in-game .tool-btn.active { background: var(--brand-soft); border-color: var(--brand); }
+  body.in-game .size-dot { background: transparent; }
+  body.in-game .size-dot:hover { background: var(--card); transform: none; }
+  body.in-game .size-dot.active { background: var(--brand-soft); border-color: var(--brand); }
+}

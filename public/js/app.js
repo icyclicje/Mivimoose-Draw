@@ -939,6 +939,7 @@
     gIn: [4, 6],         // gap inside a group
     gTb: [8, 14],        // gap between groups
     pad: [10, 16],       // toolbar side padding
+    chip: [8, 14],       // padding inside each group's chip
   };
   // The 45 colours are three designed families of fifteen (darks, brights,
   // pastels), so fifteen columns is the shape to keep. Narrower windows
@@ -952,9 +953,10 @@
     if (!toolbar || !palette) return;
     // Stacked layouts have their own compact toolbar — leave it to the CSS.
     if (toolbar.style.display === 'none' || window.innerWidth / uiZoom() < 1081) {
-      for (const k of ['--tb-btn', '--tb-dot', '--sw', '--tb-gin', '--tb-gap', '--tb-pad']) {
+      for (const k of ['--tb-btn', '--tb-dot', '--sw', '--tb-gin', '--tb-gap', '--tb-pad', '--tb-chip']) {
         toolbar.style.removeProperty(k);
       }
+      toolbar.style.removeProperty('width');
       palette.style.removeProperty('grid-template-columns');
       return;
     }
@@ -969,16 +971,17 @@
     const kids = groups + seps + 1;                  // + the palette
     const at = ([lo, hi], t) => Math.round(lo + (hi - lo) * t);
 
-    const widthAt = (t, cols) => {
-      const rows = Math.ceil(45 / cols);
-      void rows;
-      return at(TB.pad, t) * 2 + 2
-        + btns * at(TB.btn, t) + Math.max(0, btns - groups) * at(TB.gIn, t)
-        + dots * at(TB.dot, t) + Math.max(0, dots - 1) * at(TB.gIn, t)
-        + seps
-        + cols * at(TB.sw, t) + (cols - 1) * PALETTE_GAP
-        + Math.max(0, kids - 1) * at(TB.gTb, t);
-    };
+    // Four chips sit on the bar: the tools, the brush sizes, undo/clear and
+    // the colours. The separators are gone — the chips do that job — so they
+    // contribute nothing to the width.
+    const chips = groups + 2;
+    const widthAt = (t, cols) =>
+      at(TB.pad, t) * 2 + 2
+      + chips * at(TB.chip, t) * 2
+      + btns * at(TB.btn, t) + Math.max(0, btns - groups) * at(TB.gIn, t)
+      + dots * at(TB.dot, t) + Math.max(0, dots - 1) * at(TB.gIn, t)
+      + cols * at(TB.sw, t) + (cols - 1) * PALETTE_GAP
+      + Math.max(0, chips - 1) * at(TB.gTb, t);
 
     // Take the roomiest size that still fits on one line; only give up
     // palette columns once the whole row is already at its tightest.
@@ -1009,6 +1012,10 @@
     toolbar.style.setProperty('--tb-gin', at(TB.gIn, t) + 'px');
     toolbar.style.setProperty('--tb-gap', at(TB.gTb, t) + 'px');
     toolbar.style.setProperty('--tb-pad', at(TB.pad, t) + 'px');
+    toolbar.style.setProperty('--tb-chip', at(TB.chip, t) + 'px');
+    // The bar is exactly as wide as the drawing above it, so the two read as
+    // one object rather than a pill floating under a picture.
+    toolbar.style.width = Math.round(canvasW) + 'px';
     palette.style.gridTemplateColumns = `repeat(${cols}, var(--sw, 22px))`;
     // Only in the last-resort case (a small laptop zoomed right in) does the
     // palette give up its fixed width: it compresses and scrolls sideways so
@@ -4449,6 +4456,11 @@
   // server is what actually refuses the marks — this is the artist's warning
   // so they are not drawing into a void and wondering why nothing appears.
   let dryX = 0;
+  // The paint whispers as it sets: one sweep when the line starts moving,
+  // then a quieter one each eighth of the way across. Eight over a round is
+  // enough to feel the clock without turning into a drone.
+  const DRY_STEPS = 8;
+  let dryStep = -1;
 
   function renderDryLine(x) {
     dryX = Math.max(0, Math.min(CANVAS_W, x || 0));
@@ -4456,7 +4468,15 @@
     if (!box) return;
     const on = !!(gameState && gameState.options.wetPaint && gameState.state === 'drawing');
     box.style.display = on ? 'block' : 'none';
-    if (on) box.style.setProperty('--dry', (dryX / CANVAS_W * 100) + '%');
+    if (!on) { dryStep = -1; return; }
+    box.style.setProperty('--dry', (dryX / CANVAS_W * 100) + '%');
+
+    const step = Math.floor((dryX / CANVAS_W) * DRY_STEPS);
+    if (step > dryStep) {
+      if (dryStep < 0) { if (dryX > 0) sfx('dryStart'); }
+      else sfx('drying');
+      dryStep = step;
+    }
   }
 
   // True when this point is in paint that has already set.
@@ -4511,6 +4531,7 @@
 
   function clearModeOverlays() {
     dryX = 0;
+    dryStep = -1;
     openTiles = null;
     const dry = $('dry-overlay');
     if (dry) dry.style.display = 'none';
