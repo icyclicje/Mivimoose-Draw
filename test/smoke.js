@@ -1918,6 +1918,39 @@ async function main() {
       check('words are drawn in strict rotation', balanced, JSON.stringify(roomStub.wordUsedCount));
     }
 
+    console.log('— the odds shown next to each list are honest —');
+    {
+      // The UI shows weight / total weight. That must be what actually
+      // happens: a list's SIZE must not move its share.
+      const wordsLib = require('../lib/words');
+      const mk = (n, tag) => Array.from({ length: n }, (_, i) => tag + i);
+      const lists = { Big: mk(300, 'b'), Tiny: mk(4, 't') };
+      const runShare = (weights, N) => {
+        const room = {
+          customLists: lists,
+          selectedLists: ['Big', 'Tiny'],
+          listWeights: weights,
+          options: { avoidRepeats: false },
+          wordUsedCount: {},
+          wordOffered: new Set(),
+        };
+        let tiny = 0;
+        for (let i = 0; i < N; i++) {
+          const pick = wordsLib.getWordChoicesWithSource(room, 1);
+          if (pick.length && pick[0].listName === 'Tiny') tiny++;
+        }
+        return (tiny / N) * 100;
+      };
+
+      const evenShare = runShare({ Big: 1, Tiny: 1 }, 4000);
+      check('equal weights split evenly however big the lists are',
+        Math.abs(evenShare - 50) < 4, evenShare.toFixed(1) + '% from the 4-word list');
+
+      const heavyShare = runShare({ Big: 1, Tiny: 3 }, 4000);
+      check('a 3x weight really is a 75% share',
+        Math.abs(heavyShare - 75) < 4, heavyShare.toFixed(1) + '%');
+    }
+
     console.log('— list ownership survives a host transfer —');
     {
       const OH = connect({ guestKey: 'ea' + Date.now().toString(16).padStart(14, '0') });
@@ -1988,6 +2021,59 @@ async function main() {
       check('the moderator list is not empty', r.data.moderation.moderators.length >= 1, JSON.stringify(r.data.moderation.moderators));
       check('Silk holds a stored badge', r.data.moderation.moderators.some(m => m.username === 'Silk'));
       check('total accounts on the site are reported', r.data.totals.accounts >= 1, String(r.data.totals.accounts));
+    }
+
+    console.log('— a moderator can test a room solo —');
+    {
+      const hex = () => Date.now().toString(16).padStart(16, '0') + Math.floor(Math.random() * 1e6).toString(16).padStart(8, '0');
+
+      // An ordinary host alone is still refused.
+      const tokenN = (await rest('POST', '/auth/test-login', { username: 'solonot' + Math.floor(Math.random() * 1e6) })).data.token;
+      const SN = connect({ token: tokenN, guestKey: hex(), name: 'Alone' });
+      await once(SN, 'welcome');
+      let rp = once(SN, 'roomCreated');
+      SN.emit('createRoom', { name: 'Alone', avatar: '🎨' });
+      await rp;
+      const refused = once(SN, 'error', 5000);
+      SN.emit('startGame');
+      check('an ordinary host still cannot start alone', /at least 2 players/i.test((await refused).message || ''));
+      SN.disconnect();
+
+      // A moderator can — Silk's badge is stored by the section above.
+      const tokenM = (await rest('POST', '/auth/test-login', { username: 'Silk' })).data.token;
+      await rest('GET', '/mod/users', undefined, tokenM);
+      const SM = connect({ token: tokenM, guestKey: hex(), name: 'Modtest' });
+      await once(SM, 'welcome');
+      rp = once(SM, 'roomCreated');
+      SM.emit('createRoom', { name: 'Modtest', avatar: '🛡️' });
+      await rp;
+      let up = once(SM, 'stateUpdate');
+      SM.emit('setGameOptions', { options: { rounds: 2, roundTime: 60, hintCount: 0, wordChoices: 0 } });
+      await up;
+
+      const dsM = once(SM, 'drawingStart', 12000);
+      SM.emit('startGame');
+      const dM = await dsM;
+      check('a moderator can start a game alone', !!dM.drawerId, JSON.stringify(dM.drawerId));
+
+      // …and it keeps running instead of bouncing straight back to the lobby.
+      await sleep(700);
+      let st = once(SM, 'stateUpdate', 6000);
+      SM.emit('requestState');
+      const s1 = await st;
+      check('the solo test game keeps running', s1.state === 'drawing' || s1.state === 'choosing', s1.state);
+
+      // The round loop survives a hand-off to the next round on its own.
+      const reM = once(SM, 'roundEnd', 8000);
+      SM.emit('voteSkip');
+      await reM;
+      await sleep(7000);   // the round-end screen holds for ROUND_END_DELAY (6s)
+      st = once(SM, 'stateUpdate', 6000);
+      SM.emit('requestState');
+      const s2 = await st;
+      check('a solo round rolls on to the next one', s2.state === 'drawing' || s2.state === 'choosing', s2.state);
+      SM.disconnect();
+      await sleep(200);
     }
 
     console.log('— smart fill —');

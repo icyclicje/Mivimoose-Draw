@@ -1143,6 +1143,12 @@
     const voteList = $('btn-vote-list');
     if (voteList) voteList.style.display = s.managed ? 'inline-block' : 'none';
     $('btn-start').style.display = isHost ? 'flex' : 'none';
+    // A moderator can start a private room alone to test it — say so, rather
+    // than letting the button look like it will just refuse.
+    const meRow = (s.players || []).find(p => p.id === myId);
+    const soloOk = !!(meRow && meRow.mod) && !s.managed
+      && (s.players || []).filter(p => p.connected).length < 2;
+    $('btn-start').textContent = soloOk ? '🚀 Start Game (solo test)' : '🚀 Start Game';
     $('waiting-msg').style.display = isHost ? 'none' : 'block';
     $('waiting-msg').textContent = s.managed
       ? 'Public game — it kicks off by itself once there are two of you.'
@@ -1249,6 +1255,11 @@
 
       const meta = el('div', 'wl-meta');
       meta.appendChild(el('span', 'cnt', info.count + (info.count === 1 ? ' word' : ' words')));
+      // How often the next word comes from this list — filled in by
+      // renderListOddsNow so it tracks the ticks and weights live.
+      const oddsPill = el('span', 'wl-odds');
+      oddsPill.dataset.list = info.name;
+      meta.appendChild(oddsPill);
       const actions = el('span', 'wl-actions');
       // Your own contribution (or a built-in) opens for reading; a list a
       // room-mate added stays theirs, crown or no crown.
@@ -1374,21 +1385,38 @@
     oddsFrame = requestAnimationFrame(() => { oddsFrame = null; renderListOddsNow(); });
   }
 
+  // 12.5% reads better than 13% at the low end, and 40% better than 40.0%.
+  function fmtPct(pct) {
+    return pct.toFixed(pct < 10 ? 1 : 0) + '%';
+  }
+
   function renderListOddsNow() {
-    const box = $('list-odds');
-    if (!box || box.style.display === 'none') return;
     const items = [];
     document.querySelectorAll('#wl-grid .wl-item').forEach(item => {
       const cb = item.querySelector('input[type=checkbox]');
       const sl = item.querySelector('input[type=range]');
       if (cb.checked) items.push({ name: cb.value, w: parseInt(sl.value, 10) || 1 });
     });
+    const total = items.reduce((s, i) => s + i.w, 0);
+    const share = {};
+    for (const i of items) share[i.name] = (i.w / total) * 100;
+
+    // The pill beside each word count. An unticked list is not in the draw
+    // at all, so it shows nothing rather than a misleading 0%.
+    document.querySelectorAll('#wl-grid .wl-odds').forEach(pill => {
+      const pct = share[pill.dataset.list];
+      if (pct === undefined) { pill.textContent = ''; pill.title = ''; return; }
+      pill.textContent = fmtPct(pct) + ' chance';
+      pill.title = 'How often the next word comes from this list. Its weight sets this — the number of words in it does not.';
+    });
+
+    const box = $('list-odds');
+    if (!box || box.style.display === 'none') return;
     box.textContent = '';
     if (!items.length) {
       box.appendChild(el('div', 'odds-note', 'Nothing ticked — pick at least one list.'));
       return;
     }
-    const total = items.reduce((s, i) => s + i.w, 0);
     items.sort((a, b) => b.w - a.w);
     for (const i of items) {
       const pct = (i.w / total) * 100;
@@ -1399,7 +1427,7 @@
       fill.style.width = pct.toFixed(1) + '%';
       bar.appendChild(fill);
       row.appendChild(bar);
-      row.appendChild(el('span', 'opct', pct.toFixed(pct < 10 ? 1 : 0) + '%'));
+      row.appendChild(el('span', 'opct', fmtPct(pct)));
       box.appendChild(row);
     }
     box.appendChild(el('div', 'odds-note', "How likely each word is to come from that list. The weight slider is what moves this — how big the list is doesn't matter."));

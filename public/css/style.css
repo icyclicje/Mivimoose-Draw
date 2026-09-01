@@ -2208,3 +2208,34 @@ body.in-game .timer-num { font-size: 0.95rem; }
 /* The colours can never leave the screen again: the palette wraps to the
    width it actually has instead of demanding 23 rigid columns. */
 body.in-game .palette { display: flex; flex-wrap: wrap; gap: 3px; justify-content: center; max-width: 560px; min-width: 0; }
+
+/* ══════════ Batch 30 — themed scrollbars + inline list odds ══════════ */
+
+/* Scrollbars in the site's own colours instead of the operating system's.
+   This covers the list-information words box, the library, the players
+   column and every other scrolling panel, and it re-colours itself with
+   the theme because it is built from the same tokens. */
+* { scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
+::-webkit-scrollbar { width: 11px; height: 11px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--line);
+  border-radius: 99px;
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover { background: var(--brand); background-clip: content-box; }
+::-webkit-scrollbar-corner { background: transparent; }
+
+/* The words box in list information gets a little inset so the bar has
+   somewhere to sit. */
+.mw-words, .li-words { padding-right: 4px; }
+
+/* The odds, beside the word count. */
+.wl-odds {
+  font-size: 0.68rem; font-weight: 800;
+  color: var(--brand-on-soft); background: var(--brand-soft);
+  border-radius: 99px; padding: 1px 7px;
+  white-space: nowrap; flex-shrink: 0;
+}
+.wl-odds:empty { display: none; }
