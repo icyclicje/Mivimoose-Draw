@@ -256,8 +256,10 @@
         list.shared ? 'LINK ON' : 'PRIVATE'));
 
       const shareBtn = el('button', null, list.shared ? '🔗' : '🔒');
-      shareBtn.title = list.shared ? 'Sharing is on — click to manage' : 'Only you can see this. Click to make a link.';
-      shareBtn.onclick = () => toggleShare(list, wrap);
+      shareBtn.title = list.shared
+        ? 'Copy the share link'
+        : 'Only you can see this. Click to make a link and copy it.';
+      shareBtn.onclick = () => shareAndCopy(list, wrap);
 
       const editBtn = el('button', null, '✏️');
       editBtn.title = 'Edit';
@@ -318,18 +320,26 @@
     return box;
   }
 
-  async function toggleShare(list) {
-    if (list.shared) {
-      // Already on — scroll the link into view rather than toggling it off
-      // by accident. The explicit button below does that.
-      toast('🔗 The link is under the list.');
-      return;
-    }
+  // One click, one link on the clipboard. A list that is not shared yet
+  // gets its link made first — the copy still happens in the same click, so
+  // the clipboard write stays inside the user gesture browsers require.
+  async function shareAndCopy(list) {
     try {
-      const res = await API.shareList(list.id, true);
-      toast('🔗 Link created — anyone with it can grab this list.');
-      try { await navigator.clipboard.writeText(res.url); toast('📋 Copied to your clipboard.'); } catch (e) {}
-      refreshLists();
+      let url = list.shared ? list.shareUrl : null;
+      if (!url) {
+        const res = await API.shareList(list.id, true);
+        url = res.url;
+      }
+      if (!url) throw new Error('No link came back.');
+      try {
+        await navigator.clipboard.writeText(url);
+        toast(list.shared ? '📋 Link copied.' : '🔗 Link created and copied.');
+      } catch (e) {
+        // Clipboard blocked (an insecure origin, or permission denied) —
+        // show the link instead of pretending it worked.
+        toast('🔗 Link ready: ' + url);
+      }
+      if (!list.shared) refreshLists();
     } catch (e) { toast('❌ ' + e.message); }
   }
 

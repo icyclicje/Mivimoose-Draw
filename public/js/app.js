@@ -806,7 +806,21 @@
   }
 
   // ── Rooms & screens ──
+  let lastRoomCode = null;
+
   function enterRoom(code, state, resumed) {
+    // A different room starts a clean conversation — the last game's chat
+    // hanging around is confusing, and its history is not yours any more.
+    // Reconnecting to the same room keeps what is on screen.
+    if (code !== lastRoomCode) {
+      $('game-chat').textContent = '';
+      $('lobby-chat').textContent = '';
+      chatHistory.game.length = 0;
+      chatHistory.lobby.length = 0;
+      chatCursor.game = -1;
+      chatCursor.lobby = -1;
+    }
+    lastRoomCode = code;
     roomCode = code;
     gameState = state;
     API.lsSet('mivi_room', code);
@@ -1159,10 +1173,18 @@
     strip.title = (totals.rooms || 0) + (totals.rooms === 1 ? ' room' : ' rooms')
       + (totals.playing ? ' · ' + totals.playing + ' mid-game' : '');
   }
+  let roomsSig = null;
+
   async function fetchRooms() {
     try {
       const data = await API.publicRooms();
       renderOnlineTotals(data.totals);
+      // Polling every few seconds means most fetches change nothing. Redraw
+      // only when they do, or the row under the pointer keeps vanishing.
+      const sig = JSON.stringify((data.rooms || []).map(r =>
+        [r.code, r.name, r.state, r.round, r.totalRounds, r.players, r.maxPlayers]));
+      if (sig === roomsSig) return;
+      roomsSig = sig;
       const list = $('rooms-list');
       list.textContent = '';
       if (!data.rooms.length) {
@@ -1190,7 +1212,7 @@
   function startRoomsPoll() {
     stopRoomsPoll();
     fetchRooms();
-    roomsPoll = setInterval(fetchRooms, 8000);
+    roomsPoll = setInterval(fetchRooms, 3000);
   }
   function stopRoomsPoll() { if (roomsPoll) { clearInterval(roomsPoll); roomsPoll = null; } }
 
@@ -4284,7 +4306,10 @@
     } else {
       me.style.display = 'none';
     }
-    $('lb-sub').textContent = (cat ? cat.label : '') + ' · ' + lbData.players + ' players with stats';
+    const shown = lbData.shown || (cat ? cat.rows.length : 0);
+    $('lb-sub').textContent = (cat ? cat.label : '') + ' · ' + lbData.players + ' player'
+      + (lbData.players === 1 ? '' : 's')
+      + (shown < lbData.players ? ' · top ' + shown + ' shown' : '');
   }
 
   // ══════════ Moderator statistics ══════════

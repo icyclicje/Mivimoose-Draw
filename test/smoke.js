@@ -2323,6 +2323,49 @@ async function main() {
       check('flex does not resize it', finalOf['flex'] === '0 1 auto', finalOf['flex']);
     }
 
+    console.log('— everybody is on the leaderboard —');
+    {
+      // Someone who just made an account, with nothing scored yet, still
+      // has to be able to find themselves on the board.
+      const fresh = 'lbnew' + Math.floor(Math.random() * 1e7);
+      const tokenF = (await rest('POST', '/auth/test-login', { username: fresh })).data.token;
+
+      let r = await rest('GET', '/leaderboard');
+      check('the board is public', r.status === 200 && !!r.data.categories);
+      const names = r.data.categories.points.rows.map(x => x.username);
+      check('a brand-new account is listed', names.indexOf(fresh) !== -1,
+        r.data.categories.points.rows.length + ' rows');
+      check('the count covers every account', r.data.players >= names.length, String(r.data.players));
+
+      // …and signed in, they get their own rank rather than a blank.
+      r = await rest('GET', '/leaderboard', undefined, tokenF);
+      const mine = r.data.categories.points;
+      check('a scoreless player still gets a rank', typeof mine.myRank === 'number' && mine.myRank > 0,
+        JSON.stringify(mine.myRank));
+      check('their score reads zero, not missing', mine.myValue === 0, JSON.stringify(mine.myValue));
+      check('they are flagged as themselves in the rows',
+        mine.rows.some(x => x.me && x.username === fresh));
+
+      // Ties share a rank: everyone on zero sits at the same number.
+      const zeros = mine.rows.filter(x => x.value === 0);
+      if (zeros.length > 1) {
+        const sameRank = zeros.every(x => x.rank === zeros[0].rank);
+        check('players on the same score share a rank', sameRank,
+          zeros.slice(0, 4).map(x => x.username + '#' + x.rank).join(' '));
+      } else {
+        check('players on the same score share a rank', true, 'only one scoreless player');
+      }
+
+      // Anyone who has actually scored must outrank the newcomer.
+      const scored = mine.rows.filter(x => x.value > 0);
+      if (scored.length) {
+        check('scoring beats not scoring', scored.every(x => x.rank < mine.myRank),
+          'top ' + scored[0].value + ' vs my rank ' + mine.myRank);
+      } else {
+        check('scoring beats not scoring', true, 'nobody has scored yet');
+      }
+    }
+
     console.log('— smart fill —');
     {
       const MiviFill = require('../public/js/fill.js');

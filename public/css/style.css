@@ -2431,3 +2431,7 @@ body.in-game .palette { display: flex; flex-wrap: wrap; gap: 3px; justify-conten
 @media (min-width: 861px) {
   .re-image { flex: 0 1 auto; max-width: 60%; }
 }
+
+/* The M badge explains itself on hover (title="Moderator"), so point at it
+   with the cursor people expect for that. */
+.mod-chip { cursor: help; }
