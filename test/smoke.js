@@ -2129,7 +2129,8 @@ async function main() {
       // replace a big list with a short one.
       const appSrc = fs.readFileSync(require('path').join(__dirname, '../public/js/app.js'), 'utf8');
       const grab = (name) => {
-        const start = appSrc.indexOf('  function ' + name + '(');
+        let start = appSrc.indexOf('  function ' + name + '(');
+        if (start < 0) start = appSrc.indexOf('  async function ' + name + '(');
         if (start < 0) throw new Error('missing ' + name);
         let i = appSrc.indexOf('{', start), depth = 0;
         for (; i < appSrc.length; i++) {
@@ -2145,9 +2146,22 @@ async function main() {
         lsSet: (k, v) => { store[k] = v; },
         lsTrySet: (k, v) => { if (v.length > 200 * 1024) return false; store[k] = v; return true; },
       };
-      const mod = new Function('API', 'renderDeviceLists',
-        consts + '\n' + grab('deviceLists') + '\n' + grab('rememberList') + '\n' + grab('renameDeviceList') +
-        '\nreturn { deviceLists, rememberList, renameDeviceList };')(FakeAPI, () => {});
+      // rememberList now also pushes the list up to your account, and
+      // renameDeviceList keeps the account copy in step. Neither should do a
+      // thing here — signed out, the browser copy is the whole story — so the
+      // harness supplies a signed-out account and checks it was consulted.
+      let accountWrites = 0;
+      const FakeWindow = {
+        MiviAccount: {
+          isLoggedIn: () => false,
+          myLists: () => { accountWrites++; return []; },
+          refreshLists: async () => { accountWrites++; },
+        },
+      };
+      const mod = new Function('API', 'renderDeviceLists', 'window', 'toast',
+        consts + '\n' + grab('deviceLists') + '\n' + grab('saveListToAccount') + '\n'
+        + grab('rememberList') + '\n' + grab('renameDeviceList') +
+        '\nreturn { deviceLists, rememberList, renameDeviceList };')(FakeAPI, () => {}, FakeWindow, () => {});
 
       const mkw = (n) => Array.from({ length: n }, (_, i) => 'dw' + i);
       mod.rememberList('BigList', mkw(5000));
@@ -2167,6 +2181,8 @@ async function main() {
       const huge = mod.deviceLists().find(l => l.name === 'Huge');
       check('a list that will not fit is skipped, not truncated',
         !huge || huge.words.length === 60000, huge ? String(huge.words.length) : 'not cached');
+      check('a signed-out player never has a list pushed to an account',
+        accountWrites === 0, String(accountWrites));
     }
 
     console.log('— random word count spreads at every setting —');
@@ -2321,6 +2337,512 @@ async function main() {
       // A flex-basis percentage would size it again — in a row by width, in
       // the stacked column by height.
       check('flex does not resize it', finalOf['flex'] === '0 1 auto', finalOf['flex']);
+    }
+
+    // ═══ Persistence ═══
+    // The suite used to pass against a store that saved nothing at all: every
+    // check read back from the same process that had just written. These start
+    // a second server, hard-kill it, and start a third on the same data — which
+    // is what a redeploy does, and what used to lose everybody's account.
+    console.log('— data survives a restart —');
+    {
+      const persistDir = SMOKE_DATA + '-persist';
+      const persistPort = Number(PORT) + 7;
+      const pBase = 'http://localhost:' + persistPort;
+
+      const bootPersist = (extraEnv) => new Promise((resolve, reject) => {
+        const child = spawn(process.execPath, [path.join(__dirname, '..', 'server.js')], {
+          env: {
+            ...process.env, PORT: String(persistPort), ALLOW_TEST_LOGIN: '1',
+            MIVI_DATA_DIR: persistDir, MIVI_NO_CONFIG: '1', DATABASE_URL: '',
+            ...(extraEnv || {}),
+          },
+          stdio: ['ignore', 'pipe', 'pipe'],
+        });
+        let out = '';
+        const t = setTimeout(() => reject(new Error('persistence server did not start: ' + out)), 20000);
+        child.stdout.on('data', (d) => {
+          out += String(d);
+          if (out.includes('running')) { clearTimeout(t); resolve({ child, out: () => out }); }
+        });
+        child.stderr.on('data', (d) => { out += String(d); });
+      });
+
+      const pRest = async (method, route, body, tok) => {
+        const headers = { 'Content-Type': 'application/json' };
+        if (tok) headers.Authorization = 'Bearer ' + tok;
+        const res = await fetch(pBase + '/api' + route, {
+          method, headers, body: body === undefined ? undefined : JSON.stringify(body),
+        });
+        let data = null;
+        try { data = await res.json(); } catch (e) {}
+        return { status: res.status, data };
+      };
+
+      fs.rmSync(persistDir, { recursive: true, force: true });
+      let ptoken, plistId, pdrawId;
+      let first = await bootPersist();
+      try {
+        const login = await pRest('POST', '/auth/test-login', { username: 'RestartRita' });
+        ptoken = login.data && login.data.token;
+        check('a fresh database accepts a sign-in', !!ptoken, JSON.stringify(login.data));
+
+        const list = await pRest('POST', '/lists', { name: 'Kept', words: ['one', 'two'] }, ptoken);
+        plistId = list.data && list.data.list && list.data.list.id;
+        check('a list can be saved', !!plistId, JSON.stringify(list.data));
+
+        const draw = await pRest('POST', '/drawings', { dataUrl: TINY_PNG, word: 'kept', artist: 'RestartRita' }, ptoken);
+        pdrawId = draw.data && draw.data.id;
+        check('a drawing can be saved', !!pdrawId, JSON.stringify(draw.data));
+
+        const prefs = await pRest('PUT', '/prefs', {
+          updated: Date.now(),
+          prefs: { theme: 'forest', scale: 120, sfxOn: false, gameOptions: { rounds: 4 } },
+        }, ptoken);
+        check('settings can be saved to the account',
+          prefs.status === 200 && prefs.data.prefs.theme === 'forest', JSON.stringify(prefs.data));
+      } finally {
+        // SIGKILL: no graceful shutdown, no flush-on-exit. Exactly what a
+        // container does when it replaces you.
+        first.child.kill('SIGKILL');
+        await new Promise(r => first.child.on('exit', r));
+      }
+
+      check('the database is a file on disk', fs.existsSync(path.join(persistDir, 'mivimoose.db')),
+        fs.existsSync(persistDir) ? fs.readdirSync(persistDir).join(', ') : 'no data dir');
+
+      const second = await bootPersist();
+      try {
+        const me = await pRest('GET', '/auth/me', undefined, ptoken);
+        check('the session survives a restart', me.status === 200 && me.data.user.username === 'RestartRita',
+          JSON.stringify(me.data).slice(0, 140));
+        check('account settings survive a restart', me.status === 200 && me.data.user.prefs
+          && me.data.user.prefs.theme === 'forest' && me.data.user.prefs.gameOptions.rounds === 4,
+          JSON.stringify(me.data.user && me.data.user.prefs));
+
+        const words = await pRest('GET', '/lists/' + plistId, undefined, ptoken);
+        check('the word list survives a restart, whole',
+          words.status === 200 && words.data.list.words.join(',') === 'one,two',
+          JSON.stringify(words.data).slice(0, 140));
+
+        const img = await fetch(pBase + '/api/drawings/' + pdrawId + '/image');
+        const bytes = Buffer.from(await img.arrayBuffer());
+        check('the drawing survives a restart as real image bytes',
+          img.status === 200 && bytes.length > 40 && bytes.readUInt32BE(0) === 0x89504e47,
+          'status ' + img.status + ', ' + bytes.length + ' bytes');
+      } finally {
+        second.child.kill('SIGKILL');
+        await new Promise(r => second.child.on('exit', r));
+      }
+      try { fs.rmSync(persistDir, { recursive: true, force: true }); } catch (e) {}
+    }
+
+    console.log('— the same thing again, on Postgres —');
+    {
+      // Postgres is what runs in production, and it is a different dialect
+      // from the SQLite used above: other type names, $1 placeholders instead
+      // of ?, BYTEA instead of BLOB, bigints that arrive as strings. Testing
+      // only SQLite would leave every one of those to be discovered by a
+      // deploy. pglite is a real Postgres compiled to WebAssembly, so this
+      // runs the actual dialect without anybody installing a server.
+      let havePglite = true;
+      try { require.resolve('@electric-sql/pglite'); } catch (e) { havePglite = false; }
+
+      if (!havePglite) {
+        console.log('  … skipped: @electric-sql/pglite is not installed (npm install)');
+      } else {
+        const pgDir = SMOKE_DATA + '-pg';
+        const pgPort = Number(PORT) + 9;
+        const pgBase = 'http://localhost:' + pgPort;
+        fs.rmSync(pgDir, { recursive: true, force: true });
+
+        const bootPg = () => new Promise((resolve, reject) => {
+          const child = spawn(process.execPath, [path.join(__dirname, '..', 'server.js')], {
+            env: {
+              ...process.env, PORT: String(pgPort), ALLOW_TEST_LOGIN: '1',
+              MIVI_DATA_DIR: pgDir, MIVI_NO_CONFIG: '1',
+              DATABASE_URL: 'pglite://' + pgDir.replace(/\\/g, '/') + '/pg',
+            },
+            stdio: ['ignore', 'pipe', 'pipe'],
+          });
+          let out = '';
+          const t = setTimeout(() => reject(new Error('postgres server did not start: ' + out)), 40000);
+          child.stdout.on('data', (d) => {
+            out += String(d);
+            if (out.includes('running')) { clearTimeout(t); resolve({ child, log: () => out }); }
+          });
+          child.stderr.on('data', (d) => { out += String(d); });
+        });
+
+        const pgRest = async (method, route, body, tok) => {
+          const headers = { 'Content-Type': 'application/json' };
+          if (tok) headers.Authorization = 'Bearer ' + tok;
+          const res = await fetch(pgBase + '/api' + route, {
+            method, headers, body: body === undefined ? undefined : JSON.stringify(body),
+          });
+          let data = null;
+          try { data = await res.json(); } catch (e) {}
+          return { status: res.status, data };
+        };
+
+        let pgToken, pgListId, pgDrawId;
+        const first = await bootPg();
+        try {
+          // The banner prints a line after "running", so give it a moment.
+          await sleep(400);
+          check('the server opens a Postgres when DATABASE_URL points at one',
+            /Database: Postgres/.test(first.log()),
+            first.log().split(String.fromCharCode(10)).slice(0, 5).join(' | '));
+
+          const login = await pgRest('POST', '/auth/test-login', { username: 'PostgresPia' });
+          pgToken = login.data && login.data.token;
+          check('an account can be made on Postgres', !!pgToken, JSON.stringify(login.data));
+
+          const list = await pgRest('POST', '/lists', { name: 'Postgres List', words: ['alpha', 'beta', 'gamma'] }, pgToken);
+          pgListId = list.data && list.data.list && list.data.list.id;
+          check('a word list can be saved on Postgres', !!pgListId, JSON.stringify(list.data));
+
+          const draw = await pgRest('POST', '/drawings', { dataUrl: TINY_PNG, word: 'bytea', artist: 'PostgresPia' }, pgToken);
+          pgDrawId = draw.data && draw.data.id;
+          check('a drawing can be saved on Postgres (BYTEA round-trip)', !!pgDrawId, JSON.stringify(draw.data));
+
+          const prefs = await pgRest('PUT', '/prefs', { updated: Date.now(), prefs: { theme: 'candy', scale: 105 } }, pgToken);
+          check('settings can be saved on Postgres',
+            prefs.status === 200 && prefs.data.prefs.theme === 'candy', JSON.stringify(prefs.data));
+
+          const friend = await pgRest('POST', '/auth/test-login', { username: 'PostgresPal' });
+          await pgRest('POST', '/friends/request', { username: 'PostgresPal' }, pgToken);
+          await pgRest('POST', '/friends/accept', { userId: login.data.user.id }, friend.data.token);
+          const fr = await pgRest('GET', '/friends', undefined, pgToken);
+          check('friendships work on Postgres',
+            (fr.data.friends || []).some(f => f.username === 'PostgresPal'),
+            JSON.stringify(fr.data).slice(0, 160));
+        } finally {
+          first.child.kill('SIGKILL');
+          await new Promise(r => first.child.on('exit', r));
+        }
+
+        const second = await bootPg();
+        try {
+          const me = await pgRest('GET', '/auth/me', undefined, pgToken);
+          check('a Postgres session survives a restart',
+            me.status === 200 && me.data.user.username === 'PostgresPia',
+            JSON.stringify(me.data).slice(0, 140));
+          check('...and the settings with it',
+            me.status === 200 && me.data.user.prefs && me.data.user.prefs.theme === 'candy',
+            JSON.stringify(me.data.user && me.data.user.prefs));
+
+          const words = await pgRest('GET', '/lists/' + pgListId, undefined, pgToken);
+          check('...and the word list, whole',
+            words.status === 200 && words.data.list.words.join(',') === 'alpha,beta,gamma',
+            JSON.stringify(words.data).slice(0, 140));
+
+          const img = await fetch(pgBase + '/api/drawings/' + pgDrawId + '/image');
+          const bytes = Buffer.from(await img.arrayBuffer());
+          check('...and the drawing, as real image bytes',
+            img.status === 200 && bytes.length > 40 && bytes.readUInt32BE(0) === 0x89504e47,
+            'status ' + img.status + ', ' + bytes.length + ' bytes');
+
+          const lb = await pgRest('GET', '/leaderboard');
+          check('the leaderboard queries work on Postgres', lb.status === 200 && !!lb.data.categories);
+        } finally {
+          second.child.kill('SIGKILL');
+          await new Promise(r => second.child.on('exit', r));
+        }
+        try { fs.rmSync(pgDir, { recursive: true, force: true }); } catch (e) {}
+      }
+    }
+
+    console.log('— an old data/db.json is carried across —');
+    {
+      // The importer runs exactly once, on the first boot after the upgrade,
+      // and then disables itself. It is the least reversible code in the
+      // project, so it is worth testing on purpose.
+      const importDir = SMOKE_DATA + '-import';
+      const importPort = Number(PORT) + 8;
+      const iBase = 'http://localhost:' + importPort;
+      fs.rmSync(importDir, { recursive: true, force: true });
+      fs.mkdirSync(path.join(importDir, 'drawings'), { recursive: true });
+
+      const OLD_TOKEN = 'b'.repeat(48);
+      const pngBytes = Buffer.from(TINY_PNG.split(',')[1], 'base64');
+      fs.writeFileSync(path.join(importDir, 'drawings', 'ffff000011112222.png'), pngBytes);
+      fs.writeFileSync(path.join(importDir, 'db.json'), JSON.stringify({
+        users: {
+          'aaaa000011112222': {
+            id: 'aaaa000011112222', discordId: '4242', username: 'LegacyLou',
+            created: 1700000000000, avatar: { emoji: '🦕', color: '#abcdef' },
+            stats: { games: 5, wins: 2, points: 1234, guesses: 20, wordsDrawn: 6, likes: 3 },
+            friends: ['bbbb000011112222'],
+          },
+          // No stats object, and a username that only differs in case: both
+          // things the old JSON store allowed and SQL will not.
+          'bbbb000011112222': {
+            id: 'bbbb000011112222', discordId: '4343', username: 'legacylou',
+            created: 1700000100000, avatar: { emoji: '🐌', color: '#123456' },
+          },
+        },
+        tokens: { [OLD_TOKEN]: { userId: 'aaaa000011112222', created: Date.now() } },
+        lists: { 'cccc000011112222': { id: 'cccc000011112222', ownerId: 'aaaa000011112222', name: 'Old List', words: ['x', 'y', 'z'], created: 1, updated: 1 } },
+        drawings: { 'ffff000011112222': { id: 'ffff000011112222', ownerId: 'aaaa000011112222', word: 'fossil', artist: 'LegacyLou', created: 2, guessedCount: 1, playerCount: 2, likes: 0 } },
+        library: { 'eeee000011112222': { id: 'eeee000011112222', ownerId: 'aaaa000011112222', author: 'LegacyLou', name: 'Old Share', words: ['p', 'q'], created: 3 } },
+        stats: { hourly: [], daily: [], accountsByDay: {} },
+      }));
+
+      const bootImport = () => new Promise((resolve, reject) => {
+        const child = spawn(process.execPath, [path.join(__dirname, '..', 'server.js')], {
+          env: { ...process.env, PORT: String(importPort), MIVI_DATA_DIR: importDir, MIVI_NO_CONFIG: '1', DATABASE_URL: '' },
+          stdio: ['ignore', 'pipe', 'pipe'],
+        });
+        let out = '';
+        const t = setTimeout(() => reject(new Error('import server did not start: ' + out)), 20000);
+        child.stdout.on('data', (d) => { out += String(d); if (out.includes('running')) { clearTimeout(t); resolve({ child, log: () => out }); } });
+        child.stderr.on('data', (d) => { out += String(d); });
+      });
+
+      const iRest = async (route, tok) => {
+        const headers = {};
+        if (tok) headers.Authorization = 'Bearer ' + tok;
+        const res = await fetch(iBase + '/api' + route, { headers });
+        let data = null;
+        try { data = await res.json(); } catch (e) {}
+        return { status: res.status, data };
+      };
+
+      const run1 = await bootImport();
+      try {
+        check('the import says what it carried across', /Imported from data\/db\.json/.test(run1.log()),
+          run1.log().split(String.fromCharCode(10)).slice(0, 6).join(' | '));
+
+        const me = await iRest('/auth/me', OLD_TOKEN);
+        check('an existing session keeps working (the token was hashed, not dropped)',
+          me.status === 200 && me.data.user.username === 'LegacyLou', JSON.stringify(me.data).slice(0, 140));
+        check('their stats came across', me.status === 200 && me.data.user.stats.points === 1234);
+
+        const lists = await iRest('/lists', OLD_TOKEN);
+        check('their word list came across', (lists.data.lists || []).some(l => l.name === 'Old List'),
+          JSON.stringify(lists.data).slice(0, 140));
+
+        const img = await fetch(iBase + '/api/drawings/ffff000011112222/image');
+        const bytes = Buffer.from(await img.arrayBuffer());
+        check('the drawing moved off the disk and into the database', img.status === 200 && bytes.equals(pngBytes),
+          'status ' + img.status + ', ' + bytes.length + ' bytes');
+
+        const lib = await iRest('/library?q=Old');
+        const shared = (lib.data.lists || []).find(l => l.name === 'Old Share');
+        check('their shared list came across', !!shared, JSON.stringify(lib.data).slice(0, 160));
+        check('a download count that was missing became 0, not NaN', shared && shared.downloads === 0,
+          shared ? String(shared.downloads) : 'n/a');
+
+        const friends = await iRest('/friends', OLD_TOKEN);
+        check('a friendship recorded on one side only was repaired',
+          (friends.data.friends || []).length === 1, JSON.stringify(friends.data).slice(0, 160));
+
+        const lb = await iRest('/leaderboard');
+        check('the two case-duplicate names were pulled apart',
+          !/"username":"legacylou"/.test(JSON.stringify(lb.data)), 'a lower-case duplicate is still there');
+
+        check('db.json is left alone as a backup', fs.existsSync(path.join(importDir, 'db.json')));
+      } finally {
+        run1.child.kill('SIGKILL');
+        await new Promise(r => run1.child.on('exit', r));
+      }
+
+      const run2 = await bootImport();
+      try {
+        check('the import does not run a second time', !/Imported from data\/db\.json/.test(run2.log()),
+          run2.log().split(String.fromCharCode(10)).slice(0, 6).join(' | '));
+        const lists = await iRest('/lists', OLD_TOKEN);
+        check('and there is still exactly one copy of everything',
+          (lists.data.lists || []).filter(l => l.name === 'Old List').length === 1,
+          JSON.stringify(lists.data).slice(0, 160));
+      } finally {
+        run2.child.kill('SIGKILL');
+        await new Promise(r => run2.child.on('exit', r));
+      }
+      try { fs.rmSync(importDir, { recursive: true, force: true }); } catch (e) {}
+    }
+
+    console.log('— settings follow the account, not the browser —');
+    {
+      // public/js/prefs.js decides which copy wins when a browser and an
+      // account disagree. Run the real module against two fake browsers.
+      const prefsSrc = fs.readFileSync(path.join(__dirname, '..', 'public', 'js', 'prefs.js'), 'utf8');
+      function makeDevice() {
+        const store = {};
+        const pushed = [];
+        const api = {
+          lsGet: (k) => (k in store ? store[k] : null),
+          lsSet: (k, v) => { store[k] = String(v); },
+          lsDel: (k) => { delete store[k]; },
+          putPrefs: async (prefs, updated) => { pushed.push({ prefs, updated }); return { prefs, updated }; },
+        };
+        const win = { MiviAPI: api, addEventListener: () => {} };
+        new Function('window', prefsSrc)(win);
+        return { prefs: win.MiviPrefs, store, pushed };
+      }
+
+      const laptop = makeDevice();
+      laptop.prefs.set('theme', 'ocean');
+      laptop.prefs.set('scale', 115);
+      check('a setting is written to this browser straight away',
+        laptop.store.mivi_theme === 'ocean' && laptop.store.mivi_scale === '115',
+        JSON.stringify(laptop.store));
+      check('...and is stamped so the newest copy can be identified',
+        Number(laptop.store.mivi_prefs_updated) > 0);
+
+      // Signing in with local settings and an untouched account pushes up.
+      laptop.prefs.attachAccount({ prefs: {}, prefsUpdated: 0 });
+      await new Promise(r => setTimeout(r, 20));
+      check('signing in carries this browser\u2019s settings up to the account',
+        laptop.pushed.length === 1 && laptop.pushed[0].prefs.theme === 'ocean',
+        JSON.stringify(laptop.pushed));
+
+      // A second, empty device signing into the same account adopts them.
+      const phone = makeDevice();
+      let adopted = null;
+      phone.prefs.onAdopt((changed) => { adopted = changed; });
+      phone.prefs.attachAccount({ prefs: { theme: 'ocean', scale: 115, sfxOn: false }, prefsUpdated: Date.now() });
+      check('a new device picks the account settings up',
+        phone.store.mivi_theme === 'ocean' && phone.store.mivi_scale === '115'
+        && phone.store.mivi_audio_sfx_on === 'false', JSON.stringify(phone.store));
+      check('...and tells the app what changed so it can repaint',
+        Array.isArray(adopted) && adopted.includes('theme'), JSON.stringify(adopted));
+      check('a device that adopts does not immediately push back',
+        phone.pushed.length === 0, JSON.stringify(phone.pushed));
+
+      // An older account copy must not overwrite newer local changes.
+      const desk = makeDevice();
+      desk.prefs.set('theme', 'noir');
+      desk.prefs.attachAccount({ prefs: { theme: 'candy' }, prefsUpdated: 1 });
+      check('a stale account copy does not overwrite a newer local change',
+        desk.store.mivi_theme === 'noir', desk.store.mivi_theme);
+
+      // Signed out, nothing leaves the browser.
+      const guest = makeDevice();
+      guest.prefs.attachAccount(null);
+      guest.prefs.set('theme', 'parchment');
+      await new Promise(r => setTimeout(r, 20));
+      check('a signed-out player still gets their settings saved locally',
+        guest.store.mivi_theme === 'parchment');
+      check('...and nothing is sent anywhere', guest.pushed.length === 0);
+    }
+
+    console.log('— the preferences endpoint refuses junk —');
+    {
+      const who = 'prefs' + Math.floor(Math.random() * 1e6);
+      const login = await rest('POST', '/auth/test-login', { username: who });
+      const ptok = login.data.token;
+
+      let pr = await rest('PUT', '/prefs', { updated: Date.now(), prefs: { theme: 'ocean', scale: 9999, nonsense: 'x'.repeat(100) } }, ptok);
+      check('an out-of-range value is dropped, not stored', pr.status === 200 && pr.data.prefs.scale === undefined,
+        JSON.stringify(pr.data));
+      check('an unknown key is dropped', pr.status === 200 && pr.data.prefs.nonsense === undefined);
+      check('a known-good value alongside it still lands', pr.data.prefs.theme === 'ocean');
+
+      pr = await rest('PUT', '/prefs', { updated: 1, prefs: { theme: 'noir' } }, ptok);
+      check('an older write is refused and the current copy handed back',
+        pr.status === 200 && pr.data.stale === true && pr.data.prefs.theme === 'ocean', JSON.stringify(pr.data));
+
+      pr = await rest('PUT', '/prefs', { updated: Date.now(), prefs: { gameOptions: { rounds: 8, notAnOption: 3 } } }, ptok);
+      check('only real game options are kept',
+        pr.data.prefs.gameOptions.rounds === 8 && pr.data.prefs.gameOptions.notAnOption === undefined,
+        JSON.stringify(pr.data.prefs.gameOptions));
+
+      pr = await rest('GET', '/prefs', undefined, ptok);
+      check('reading them back gives the same thing', pr.status === 200 && pr.data.prefs.theme === 'ocean');
+
+      pr = await rest('PUT', '/prefs', { prefs: { theme: 'ocean' } });
+      check('signed out, there is nothing to save to', pr.status === 401);
+    }
+
+    console.log('— the phone layout —');
+    {
+      // These are the specific mistakes that made the game unusable on a
+      // phone. They are all cheap to state and were all expensive to find,
+      // so they are worth a test each.
+      const css = fs.readFileSync(require('path').join(__dirname, '..', 'public', 'css', 'style.css'), 'utf8');
+      const app = fs.readFileSync(require('path').join(__dirname, '..', 'public', 'js', 'app.js'), 'utf8');
+      const html = fs.readFileSync(require('path').join(__dirname, '..', 'public', 'index.html'), 'utf8');
+
+      // A swatch is sized `width: 100%`, which means "fill your grid track"
+      // — and "as wide as the whole palette" the moment the palette is a
+      // flex row instead. That turned 46 colours into 46 full-width rows and
+      // a toolbar seventeen thousand pixels tall.
+      check('the in-game palette is a grid, never a flex row',
+        !/body\.in-game\s+\.palette\s*\{[^}]*display:\s*flex/.test(css),
+        'a flex palette gives every colour its own full-width line');
+
+      // The play screen turns page scrolling off, so anything that does not
+      // fit is unreachable rather than merely below the fold.
+      check('the phone play screen can still scroll if something does not fit',
+        /body\.in-game #main \{[^}]*overflow-y: auto/.test(css));
+
+      // viewport-fit=cover deliberately extends the page under the notch and
+      // the home indicator; something then has to pad it back.
+      check('the viewport opts into the display cutout', /viewport-fit=cover/.test(html));
+      check('...and the layout compensates for it', /env\(safe-area-inset-bottom/.test(css));
+
+      // 44px is the size a finger needs. The tools were 34.
+      check('drawing tools are a real touch target on a phone',
+        /body\.in-game \.tool-btn \{[^}]*height: 44px/.test(css));
+      check('so is the button that closes the chat drawer',
+        /\.chat-head \.chat-close \{[^}]*min-height: 44px/.test(css));
+
+      // The drawer, its toggle and its close button all existed already —
+      // they were just scoped to fullscreen, so a normal phone game had the
+      // chat sitting inline eating a third of the screen.
+      check('chat is a drawer during a game on a phone',
+        /body\.in-game \.chat-card \{[^}]*position: fixed/.test(css));
+      check('...and there is a button to open it',
+        /body\.in-game \.float-chat-toggle \{[^}]*display: flex/.test(css));
+
+      // #overlay-choice is always in the DOM — only its inline display
+      // changes — so a sibling selector on it matches for the whole round.
+      // Hiding the float buttons that way hid them permanently.
+      check('the like and skip buttons are not hidden by a sibling rule',
+        !/#overlay-choice ~ \.float-(actions|fullscreen)[^}]*display: none/.test(css),
+        'that selector matches all round, not just while the picker is up');
+      check('the word picker is layered above them instead',
+        /#overlay-choice \{ z-index: 3\d/.test(css));
+
+      // A Discord Activity turns fullscreen on by itself, and fitCanvas used
+      // to return before it ever sized the toolbar — which is why the colours
+      // ran off the right-hand edge inside Discord and nowhere else.
+      const focusBranch = (() => {
+        const at = app.indexOf("if (document.body.classList.contains('focus-mode'))");
+        if (at < 0) return '';
+        const end = app.indexOf('return;', at);
+        return end < 0 ? '' : app.slice(at, end);
+      })();
+      check('fullscreen still fits the toolbar to the canvas',
+        focusBranch.includes('fitToolbar('),
+        'fitCanvas returns early in focus mode without sizing the toolbar');
+      check('...and sizes the drawing itself when the layout is stacked',
+        focusBranch.includes('--canvas-max'),
+        'a 4:3 box with both dimensions pinned by flex comes out square');
+
+      // The bar is sized from an estimate that duplicates stylesheet numbers.
+      // The browser has to have the final say, or the two drift apart.
+      check('the toolbar is measured, not just calculated',
+        /getBoundingClientRect\(\)[\s\S]{0,600}?box\.right - padR/.test(app));
+      check('...and a size only counts if all the colours are on show',
+        /palette\.scrollWidth > palette\.clientWidth/.test(app));
+
+      // A phone opening its keyboard changes the visual viewport, not the
+      // window size, so `resize` never fires.
+      check('the layout reacts to the on-screen keyboard',
+        /visualViewport\.addEventListener\('resize'/.test(app));
+      check('...and the chat drawer keeps its input above it',
+        /var\(--kb, 0px\)/.test(css));
+
+      // The side columns arrive over the socket after the screen is up, so
+      // the middle column narrows after the toolbar was already sized.
+      check('the toolbar re-fits when the column around it changes size',
+        /new ResizeObserver/.test(app));
+
+      check('a phone in landscape puts the tools beside the drawing',
+        /orientation: landscape[\s\S]{0,900}?flex-direction: row/.test(css));
     }
 
     console.log('— smart fill —');

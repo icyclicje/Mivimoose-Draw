@@ -66,10 +66,39 @@
   };
 
   function persist() {
+    // MiviPrefs writes these same four localStorage keys and additionally
+    // carries them to the account, so your sound settings follow you to
+    // another device. It loads after this file, hence the guard: before it
+    // exists (and for anyone signed out) the local write is the whole story.
+    var prefs = window.MiviPrefs;
+    if (prefs) {
+      prefs.setMany({
+        musicOn: state.musicEnabled,
+        sfxOn: state.sfxEnabled,
+        musicVol: state.musicVolume,
+        sfxVol: state.sfxVolume
+      });
+      return;
+    }
     lsSet(LS_MUSIC_ON, state.musicEnabled);
     lsSet(LS_SFX_ON, state.sfxEnabled);
     lsSet(LS_MUSIC_VOL, state.musicVolume);
     lsSet(LS_SFX_VOL, state.sfxVolume);
+  }
+
+  // Re-read the four settings from storage and apply them to the live audio
+  // graph. Called when the account hands this device a newer set.
+  function reloadPreferences() {
+    state.musicEnabled = loadBool(LS_MUSIC_ON, state.musicEnabled);
+    state.sfxEnabled = loadBool(LS_SFX_ON, state.sfxEnabled);
+    state.musicVolume = loadVol(LS_MUSIC_VOL, state.musicVolume);
+    state.sfxVolume = loadVol(LS_SFX_VOL, state.sfxVolume);
+    try {
+      if (ctx && musicBus) musicBus.gain.setTargetAtTime(state.musicVolume, ctx.currentTime, 0.08);
+      if (ctx && sfxBus) sfxBus.gain.setTargetAtTime(state.sfxVolume, ctx.currentTime, 0.08);
+      if (!state.musicEnabled) stopMusicInternal();
+      else if (ctx && musicRequested && !musicPlaying) startMusicInternal();
+    } catch (e) { /* stay silent */ }
   }
 
   /* ------------------------------------------------------------------ *
@@ -899,6 +928,11 @@
         g.setValueAtTime(0.316, t + 0.25 + seconds);
         g.linearRampToValueAtTime(1, t + 0.25 + seconds + 1.2);
       } catch (e) { /* stay silent */ }
+    },
+
+    // Pick up sound settings that arrived from the account on another device.
+    reloadPreferences: function () {
+      try { reloadPreferences(); } catch (e) { /* stay silent */ }
     },
 
     getState: function () {

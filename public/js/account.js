@@ -40,6 +40,9 @@
       if (user) API.lsSet(USER_CACHE_KEY, JSON.stringify(user));
       else API.lsDel(USER_CACHE_KEY);
     } catch (e) { /* a full or blocked localStorage is not worth a crash */ }
+    // Theme, sound, name, avatar and the lobby setup live on the account too
+    // now. This is where a fresh device picks them up.
+    try { if (window.MiviPrefs) window.MiviPrefs.attachAccount(user); } catch (e) {}
   }
 
   // ── Small DOM helper (always textContent — never innerHTML with user data) ──
@@ -74,8 +77,25 @@
     }
   }
 
+  // A 401 on any request means the session is gone — expired, signed out
+  // elsewhere, revoked. Without this the chip kept showing an account while
+  // every panel behind it quietly failed.
+  let authLostWired = false;
+  function wireAuthLoss() {
+    if (authLostWired || !API.onAuthLost) return;
+    authLostWired = true;
+    API.onAuthLost(() => {
+      if (!user) return;
+      setUser(null);
+      renderChip();
+      fireChange();
+      toast('Signed out — please sign in again.');
+    });
+  }
+
   // ── Boot: restore session ──
   async function init() {
+    wireAuthLoss();
     // The footer's version chip rides on the config fetch below.
     const versionChip = document.getElementById('version-chip');
     // Paint the cached account before anything is awaited, so a returning
@@ -196,8 +216,26 @@
     refreshLists();
     refreshGallery();
     refreshFriends();
+    // Stats only ever came from the cached copy taken at page load, so a game
+    // you just finished did not show up until a hard reload. Ask the server.
+    refreshMe();
     showTab(typeof tab === 'string' ? tab : 'profile');
     $('modal-account').style.display = 'flex';
+  }
+
+  // Re-read the account and repaint anything derived from it.
+  async function refreshMe() {
+    if (!user) return;
+    try {
+      const data = await API.me();
+      setUser(data.user);
+      if ($('modal-account').style.display !== 'none') {
+        renderStats();
+        paintAvatar($('acct-avatar'), user);
+      }
+      renderChip();
+      fireChange();
+    } catch (e) { /* the cached copy stays on screen */ }
   }
 
   function renderStats() {
@@ -230,11 +268,20 @@
   let friendsData = null;
   let modInfo = null;
 
+  // Set when the last fetch failed. An empty account and an unreachable
+  // server used to look identical — both printed "No lists yet", which is
+  // how a temporary outage gets reported as "it deleted all my lists".
+  let listsError = null;
+
   async function refreshLists() {
     try {
       const data = await API.lists();
       cachedLists = data.lists;
-    } catch (e) { cachedLists = []; }
+      listsError = null;
+    } catch (e) {
+      // Keep whatever is already on screen rather than blanking it.
+      listsError = e.message || 'Could not reach the server.';
+    }
     renderLists();
     fireChange(); // lobby "my lists" dropdown may need updating
   }
@@ -242,7 +289,11 @@
   function renderLists() {
     const rows = $('lists-rows');
     rows.textContent = '';
-    if (cachedLists.length === 0) {
+    if (listsError) {
+      rows.appendChild(el('p', 'gallery-empty',
+        'Could not load your lists — ' + listsError + ' They are still saved; try again in a moment.'));
+      if (cachedLists.length === 0) return;
+    } else if (cachedLists.length === 0) {
       rows.appendChild(el('p', 'gallery-empty', 'No lists yet. Make one, or import a .txt you already have.'));
       return;
     }
@@ -576,12 +627,28 @@
   }
 
   // ── Gallery ──
+  let galleryEmptyText = null;
+
   async function refreshGallery() {
     let drawings = [];
-    try { drawings = (await API.drawings()).drawings; } catch (e) {}
+    let error = null;
+    try { drawings = (await API.drawings()).drawings; }
+    catch (e) { error = e.message || 'Could not reach the server.'; }
     const grid = $('gallery-grid');
     grid.textContent = '';
-    $('gallery-empty').style.display = drawings.length ? 'none' : 'block';
+    const empty = $('gallery-empty');
+    // Remember the real empty-gallery copy before an error message overwrites it.
+    if (galleryEmptyText === null) galleryEmptyText = empty.textContent;
+    // An outage is not an empty gallery, and saying so stops a bad minute
+    // being reported as lost drawings.
+    if (error) {
+      empty.textContent = 'Could not load your gallery — ' + error
+        + ' Your drawings are still saved.';
+      empty.style.display = 'block';
+    } else {
+      empty.textContent = galleryEmptyText;
+      empty.style.display = drawings.length ? 'none' : 'block';
+    }
     for (const d of drawings) {
       const item = el('div', 'g-item');
       const img = document.createElement('img');
@@ -668,6 +735,7 @@
     startDiscordLogin,
     myLists: () => cachedLists,
     refreshLists,
+    refreshMe,
     refreshFriends,
     friendIds: () => new Set(friendsData ? friendsData.friends.map(f => f.id) : []),
     isMod: () => !!(modInfo && modInfo.isMod),

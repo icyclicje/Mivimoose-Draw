@@ -26,8 +26,19 @@
     return k;
   }
 
-  function token() { return lsGet('mivi_token') || null; }
-  function setToken(t) { if (t) lsSet('mivi_token', t); else lsDel('mivi_token'); }
+  // The session token, with the same in-memory fallback the guest key has.
+  // In a private window (or with site data blocked) localStorage throws, and
+  // the old code then signed you straight back out — which looked exactly
+  // like "my login never saves". The token now survives the page at least.
+  //
+  // The server also sets an httpOnly session cookie during sign-in, so even a
+  // reload with no usable localStorage stays signed in.
+  let tokenCache = null;
+  function token() { return lsGet('mivi_token') || tokenCache || null; }
+  function setToken(t) {
+    tokenCache = t || null;
+    if (t) lsSet('mivi_token', t); else lsDel('mivi_token');
+  }
 
   // Where to come back to after the Discord round-trip (an invite link's
   // ?join=CODE would otherwise be lost, since OAuth returns to baseUrl).
@@ -95,6 +106,21 @@
     return (pre && !u.startsWith(pre)) ? pre + u : u;
   }
 
+  // Anything that wants to know the session just died — the account panel
+  // repaints, the socket reconnects as a guest. Without this the UI kept
+  // showing a signed-in chip while every request 401ed.
+  const authLostHandlers = [];
+  let announcedAuthLoss = false;
+  function onAuthLost(fn) { authLostHandlers.push(fn); }
+  function announceAuthLoss() {
+    if (announcedAuthLoss) return;
+    announcedAuthLoss = true;
+    setToken(null);
+    for (const fn of authLostHandlers) { try { fn(); } catch (e) {} }
+    // Let a later sign-in report a loss again.
+    setTimeout(() => { announcedAuthLoss = false; }, 1000);
+  }
+
   async function req(method, path, body) {
     const headers = { 'Content-Type': 'application/json' };
     const t = token();
@@ -104,6 +130,7 @@
       res = await fetch(apiUrl(path), {
         method,
         headers,
+        credentials: 'same-origin',   // carry the httpOnly session cookie
         body: body === undefined ? undefined : JSON.stringify(body),
       });
     } catch (e) {
@@ -115,6 +142,9 @@
       const msg = (data && data.error) || ('Request failed (' + res.status + ')');
       const err = new Error(msg);
       err.status = res.status;
+      // A 401 on a request we sent a token with means the session is gone.
+      // Say so once, rather than letting every panel fail on its own.
+      if (res.status === 401 && t && path !== '/auth/me') announceAuthLoss();
       throw err;
     }
     return data;
@@ -132,8 +162,15 @@
     authConfig: () => req('GET', '/auth/config'),
     beginDiscordLogin,
     logout: () => req('POST', '/auth/logout').catch(() => {}),
+    logoutEverywhere: () => req('POST', '/auth/logout-all'),
     me: () => req('GET', '/auth/me'),
     updateMe: (patch) => req('PUT', '/auth/me', patch),
+
+    // Settings that follow the account rather than the browser.
+    getPrefs: () => req('GET', '/prefs'),
+    putPrefs: (prefs, updated) => req('PUT', '/prefs', { prefs, updated }),
+
+    onAuthLost,
 
     lists: () => req('GET', '/lists'),
     getList: (id) => req('GET', '/lists/' + id),
@@ -174,7 +211,6 @@
     modUnban: (userId) => req('POST', '/mod/unban', { userId }),
     modGenerateList: (payload) => req('POST', '/mod/generate-list', payload),
     modStats: (range) => req('GET', '/mod/stats' + (range ? '?range=' + encodeURIComponent(range) : '')),
-    leaderboard: () => req('GET', '/leaderboard'),
     leaderboard: () => req('GET', '/leaderboard'),
 
     shareList: (id, shared) => req('POST', '/lists/' + id + '/share', { shared }),
