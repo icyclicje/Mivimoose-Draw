@@ -10,6 +10,7 @@ const { Server } = require('socket.io');
 
 const api = require('./lib/api');
 const game = require('./lib/game');
+const store = require('./lib/store');
 const config = require('./lib/config');
 const fonts = require('./lib/fonts');
 const legal = require('./lib/legal');
@@ -29,6 +30,11 @@ const io = new Server(server, {
 });
 
 app.disable('x-powered-by');
+// Railway (and every other PaaS) puts a proxy in front of us. Without this,
+// req.ip is the proxy's address for everyone, so the per-IP rate limits in
+// lib/api.js become one shared bucket for the entire server — which reads to
+// players as "it randomly refuses to save my drawing".
+app.set('trust proxy', Number(process.env.TRUST_PROXY_HOPS) || 1);
 
 // Security headers on everything we serve.
 app.use((req, res, next) => {
@@ -58,7 +64,11 @@ app.use((req, res, next) => {
 app.use('/fonts', fonts.router);
 
 app.use(compression()); // gzip/br for HTML, CSS, JS, JSON
-app.use(express.json({ limit: '8mb' })); // drawings arrive as base64 PNGs
+// Drawings, game-recap GIFs and .zip imports all arrive as base64 inside JSON,
+// which inflates them by a third. The limit has to clear the largest thing the
+// API actually accepts (a 12 MB GIF → ~16 MB of base64) or express rejects it
+// with a bare 413 before any handler gets to explain why.
+app.use(express.json({ limit: '20mb' }));
 app.use('/api', api);
 // Static assets: short cache with revalidation, so updates still land quickly.
 app.use(express.static(path.join(__dirname, 'public'), { maxAge: '10m', etag: true }));
@@ -79,7 +89,19 @@ app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-game.init(io);
+// Anything the body parser or a handler throws lands here, so the client gets
+// a JSON error it can show instead of express's HTML stack page.
+app.use('/api', (err, req, res, next) => {
+  if (res.headersSent) return next(err);
+  if (err && (err.type === 'entity.too.large' || err.status === 413)) {
+    return res.status(413).json({ error: 'That file is too large to upload.' });
+  }
+  if (err && (err.type === 'entity.parse.failed' || err.status === 400)) {
+    return res.status(400).json({ error: 'That request could not be read.' });
+  }
+  console.error('API error:', err && err.message);
+  res.status(500).json({ error: 'Something went wrong on the server.' });
+});
 
 const PORT = process.env.PORT || 3000;
 // One reading a minute is plenty of resolution for an hourly bucket, and
@@ -89,8 +111,23 @@ setInterval(() => {
   try { stats.sample(game.totals()); } catch (e) { /* never take the server down for a metric */ }
 }, STATS_EVERY_MS).unref();
 
-server.listen(PORT, () => {
+// Nothing is served until the database is open, migrated and loaded — a
+// request answered from a half-loaded store would look exactly like the data
+// loss this whole layer exists to stop.
+store.init().then(() => {
+  game.init(io);
+  server.listen(PORT, onListening);
+}).catch((e) => {
+  console.error('💥 Could not open the database, so the server did not start.');
+  console.error('   ' + e.message);
+  console.error('   Set DATABASE_URL to a Postgres connection string, or leave it unset');
+  console.error('   to use a local SQLite file under data/. See the README.');
+  process.exit(1);
+});
+
+function onListening() {
   console.log(`🎨 Mivimoose Draw running on http://localhost:${PORT}`);
+  console.log(`🗄️  Database: ${store.backend}`);
   if (config.activityEnabled) console.log('🎮 Discord Activity support is on — see docs/DISCORD_ACTIVITY.md');
   if (config.discordConfigured) {
     // Sign-in fails with 'Invalid OAuth2 redirect_uri' unless this exact
@@ -100,4 +137,4 @@ server.listen(PORT, () => {
   }
   // Pull the font files down once up front so the first player does not wait.
   fonts.warm();
-});
+}

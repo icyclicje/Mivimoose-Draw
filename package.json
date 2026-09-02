@@ -1,7 +1,7 @@
 {
   "name": "mivimoose-draw",
   "version": "2.0.0",
-  "description": "Mivimoose Draw — modern multiplayer drawing & guessing game with accounts, public matches and custom word lists",
+  "description": "Mivimoose Draw — modern multiplayer drawing & guessing game with accounts, public matches and custom word lists, backed by Postgres or SQLite",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
@@ -11,12 +11,14 @@
   "dependencies": {
     "compression": "^1.8.1",
     "express": "^4.18.2",
+    "pg": "^8.13.1",
     "socket.io": "^4.7.2"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "^0.5.8",
     "socket.io-client": "^4.7.2"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=22.5.0"
   }
 }

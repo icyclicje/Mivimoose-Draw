@@ -236,6 +236,11 @@
 
   function sfx(name) { try { Audio.sfx(name); } catch (e) {} }
 
+  // Settings that belong to you rather than to this browser. Prefs.set writes
+  // the same localStorage key it always did AND carries the value up to the
+  // account, so signing in on another device brings your setup with you.
+  const Prefs = window.MiviPrefs;
+
   function myName() { return ($('home-name').value || '').trim() || API.lsGet('mivi_name') || ''; }
   // Signed in? Your account name is your name — the box follows it unless
   // you have deliberately typed something else this session.
@@ -248,7 +253,7 @@
     if (!username) return;
     if (nameTouched && box.value.trim() && box.value.trim() !== username) return;
     box.value = username;
-    API.lsSet('mivi_name', username);
+    Prefs.set('name', username);
   }
 
   function ensureName() {
@@ -257,7 +262,7 @@
       n = ADJ[Math.floor(Math.random() * ADJ.length)] + NOUN[Math.floor(Math.random() * NOUN.length)];
       $('home-name').value = n;
     }
-    API.lsSet('mivi_name', n);
+    Prefs.set('name', n);
     return n;
   }
   function myAvatar() {
@@ -265,7 +270,7 @@
     catch (e) { return { emoji: '🎨', color: '#6C5CE7' }; }
   }
   function setAvatar(av) {
-    API.lsSet('mivi_avatar', JSON.stringify(av));
+    Prefs.set('avatar', av);
     renderAvatarBubble();
     if (socket && socket.connected) socket.emit('updateProfile', { avatar: av });
     if (window.MiviAccount.isLoggedIn()) window.MiviAccount.updateAvatar(av);
@@ -882,8 +887,38 @@
     }
     // In fullscreen the flex/aspect-ratio rules already size the canvas to
     // the space left over beside the panels — don't fight them.
+    //
+    // The toolbar still has to be fitted, though. It was not, and that is the
+    // colours-off-the-right-hand-edge bug: a Discord Activity turns focus mode
+    // on by itself (activityIsSmall), so inside Discord this function returned
+    // here and the palette kept the un-fitted width it gets from the
+    // stylesheet — wider than the bar, on a bar that does not wrap or shrink.
+    // Everywhere else fitToolbar ran and quietly hid the problem.
     if (document.body.classList.contains('focus-mode')) {
       frame.style.removeProperty('--canvas-max');
+      // …except when the layout is stacked, which on a phone it always is —
+      // and a Discord Activity turns fullscreen on by itself, so this is the
+      // normal phone case, not an edge one. Stacked, the flex rules cannot do
+      // it: they give the frame a height and let max-width clamp its width,
+      // and a box with both dimensions pinned ignores its aspect ratio. The
+      // drawing came out square. Work the size out the same way the ordinary
+      // stacked layout does.
+      const fsCard = $('canvas-card');
+      const fsBar = $('toolbar');
+      if (fsCard && window.innerWidth / uiZoom() < 901) {
+        const cs = getComputedStyle(fsCard);
+        const gap = parseFloat(cs.rowGap) || 8;
+        let chrome = (parseFloat(cs.paddingTop) || 0) + (parseFloat(cs.paddingBottom) || 0);
+        for (const el of [$('mode-banner'), $('btn-finish-drawing'), fsBar]) {
+          if (el && el.style.display !== 'none' && el.offsetHeight) chrome += el.offsetHeight + gap;
+        }
+        const availH = fsCard.getBoundingClientRect().height / uiZoom() - chrome;
+        const byHeight = Math.max(160, availH) * 4 / 3;
+        const byWidth = fsCard.clientWidth;
+        frame.style.setProperty('--canvas-max', Math.round(Math.max(160, Math.min(byHeight, byWidth))) + 'px');
+      }
+      const fsFrame = frame.getBoundingClientRect().width;
+      if (fsFrame > 0) fitToolbar(fsFrame);
       return;
     }
     const card = $('canvas-card');
@@ -972,6 +1007,7 @@
       }
       toolbar.style.removeProperty('width');
       palette.style.removeProperty('grid-template-columns');
+      palette.style.removeProperty('grid-template-rows');
       return;
     }
 
@@ -997,46 +1033,136 @@
       + cols * at(TB.sw, t) + (cols - 1) * PALETTE_GAP
       + Math.max(0, chips - 1) * at(TB.gTb, t);
 
-    // Take the roomiest size that still fits on one line; only give up
-    // palette columns once the whole row is already at its tightest.
-    let best = null;
-    for (const cols of PALETTE_COL_STEPS) {
-      for (let t = 1; t >= 0; t -= 0.02) {
-        if (widthAt(t, cols) <= canvasW) { best = { t: Math.max(0, t), cols }; break; }
-      }
-      if (best) break;
-    }
-    // Nothing fitted even at its tightest (a small laptop zoomed right in):
-    // size the swatches from the space that is actually left, and let the
-    // palette scroll sideways if even that is not enough. The row of tools
-    // stays a row either way.
-    let squeezed = false;
-    if (!best) {
-      const cols = PALETTE_COL_STEPS[PALETTE_COL_STEPS.length - 1];
-      const spare = canvasW - widthAt(0, cols) + cols * at(TB.sw, 0) + (cols - 1) * PALETTE_GAP;
-      const sw = Math.floor((spare - (cols - 1) * PALETTE_GAP) / cols);
-      best = { t: 0, cols, sw: Math.max(8, sw) };
-      squeezed = true;
-    }
+    // Put one candidate size on the bar.
+    const apply = ({ t, cols }) => {
+      toolbar.style.setProperty('--tb-btn', at(TB.btn, t) + 'px');
+      toolbar.style.setProperty('--tb-dot', at(TB.dot, t) + 'px');
+      toolbar.style.setProperty('--sw', at(TB.sw, t) + 'px');
+      toolbar.style.setProperty('--tb-gin', at(TB.gIn, t) + 'px');
+      toolbar.style.setProperty('--tb-gap', at(TB.gTb, t) + 'px');
+      toolbar.style.setProperty('--tb-pad', at(TB.pad, t) + 'px');
+      toolbar.style.setProperty('--tb-chip', at(TB.chip, t) + 'px');
+      // The 45 colours are three families of fifteen, so the grid is laid out
+      // to keep a family to a row. The custom-colour button is a 46th swatch
+      // and would start a row of its own for one button; give it a full-height
+      // column at the front instead, where it reads as a key rather than an
+      // afterthought.
+      const rows = Math.ceil(PALETTE.length / cols);
+      palette.style.gridTemplateColumns =
+        `calc(var(--sw, 22px) * 1.3) repeat(${cols}, var(--sw, 22px))`;
+      palette.style.gridTemplateRows = `repeat(${rows}, var(--sw, 22px))`;
+    };
 
-    const { t, cols } = best;
-    toolbar.style.setProperty('--tb-btn', at(TB.btn, t) + 'px');
-    toolbar.style.setProperty('--tb-dot', at(TB.dot, t) + 'px');
-    toolbar.style.setProperty('--sw', (best.sw || at(TB.sw, t)) + 'px');
-    toolbar.style.setProperty('--tb-gin', at(TB.gIn, t) + 'px');
-    toolbar.style.setProperty('--tb-gap', at(TB.gTb, t) + 'px');
-    toolbar.style.setProperty('--tb-pad', at(TB.pad, t) + 'px');
-    toolbar.style.setProperty('--tb-chip', at(TB.chip, t) + 'px');
     // The bar is exactly as wide as the drawing above it, so the two read as
     // one object rather than a pill floating under a picture.
     toolbar.style.width = Math.round(canvasW) + 'px';
-    palette.style.gridTemplateColumns = `repeat(${cols}, var(--sw, 22px))`;
-    // Only in the last-resort case (a small laptop zoomed right in) does the
-    // palette give up its fixed width: it compresses and scrolls sideways so
-    // the row of tools stays a row instead of spilling off the screen.
-    palette.style.overflowX = squeezed ? 'auto' : '';
-    palette.style.flex = squeezed ? '1 1 auto' : '';
-    palette.style.minWidth = squeezed ? '0' : '';
+    // The palette's shrink-and-scroll behaviour is permanent now (see the
+    // stylesheet), so nothing is set by hand here any more. Clear anything an
+    // older build left behind.
+    palette.style.overflowX = '';
+    palette.style.flex = '';
+    palette.style.minWidth = '';
+
+    // ── The browser decides what fits, not the arithmetic above ──
+    // widthAt() adds up sizes that really live in the stylesheet, and the two
+    // copies had drifted apart: the chip padding and the row gap were larger
+    // in the CSS than the numbers here, and the bar is also clamped by the
+    // card around it rather than being exactly canvasW wide. So the row
+    // "fitted" on paper and ran off the right of the screen in practice —
+    // which is the colours-going-off-the-edge bug.
+    //
+    // widthAt() is now used only to ORDER the sizes within one column count.
+    // Which one actually fits is settled by measuring the laid-out row, so it
+    // stays right however the stylesheet changes.
+    //
+    // Column count is tried first and separately, widest first, because the
+    // 45 colours are three designed families of fifteen — fifteen columns
+    // means one family per row. Giving up a column changes what the palette
+    // *is*, so it is worth smaller swatches to keep it.
+    const sizeSteps = [];
+    for (let t = 1; t >= -0.001; t -= 0.05) sizeSteps.push(Math.max(0, t));
+
+    // Does the row actually sit inside the bar? Not scrollWidth: on an
+    // overflow:visible flex row the browser reports it as equal to the client
+    // width however far the children spill, so it can never see the problem.
+    // Ask where the children really ended up instead.
+    const fits = () => {
+      const box = toolbar.getBoundingClientRect();
+      const cs = getComputedStyle(toolbar);
+      const padL = parseFloat(cs.paddingLeft) || 0;
+      const padR = parseFloat(cs.paddingRight) || 0;
+      for (const kid of toolbar.children) {
+        if (getComputedStyle(kid).display === 'none') continue;
+        const r = kid.getBoundingClientRect();
+        // The row is centred, so it spills off both ends at once.
+        if (r.right > box.right - padR + 1 || r.left < box.left + padL - 1) return false;
+      }
+      // The colour strip is allowed to shrink and scroll, which is what keeps
+      // the row inside the bar at any size — but that also means the row above
+      // would say "fits" for every candidate, and the search would happily
+      // pick the largest tools and crush the colours down to one swatch. A
+      // size only counts as fitting if the colours are all on show too.
+      if (palette.scrollWidth > palette.clientWidth + 1) return false;
+
+      // Stacked, width stops being the binding constraint and height starts:
+      // there is room for the biggest swatches going across, and taking it
+      // makes the bar three tall rows that eat the drawing above. Keep the
+      // tools to roughly a third of the screen and give the rest to the canvas.
+      if (toolbar.classList.contains('toolbar-stacked')) {
+        const vh = (window.visualViewport && window.visualViewport.height) || window.innerHeight;
+        if (toolbar.offsetHeight > Math.max(140, vh * 0.3)) return false;
+      }
+      return true;
+    };
+
+    // Binary search for the roomiest candidate that fits: about seven
+    // measurements instead of a hundred and twenty-six.
+    // For one column count: the roomiest size that fits, or null if none does.
+    const bestSizeFor = (cols) => {
+      let lo = 0, hi = sizeSteps.length - 1, found = null;
+      while (lo <= hi) {
+        const mid = (lo + hi) >> 1;
+        apply({ t: sizeSteps[mid], cols });
+        if (fits()) { found = { t: sizeSteps[mid], cols }; hi = mid - 1; }
+        else { lo = mid + 1; }
+      }
+      return found;
+    };
+
+    const search = () => {
+      // Most columns first: keep the families as rows for as long as possible.
+      for (const cols of PALETTE_COL_STEPS) {
+        const found = bestSizeFor(cols);
+        if (found) { apply(found); return found; }
+      }
+      const last = { t: 0, cols: PALETTE_COL_STEPS[PALETTE_COL_STEPS.length - 1] };
+      apply(last);
+      return last;
+    };
+
+    // One tidy line is the nicest shape, but not at any price. In a narrow
+    // window — a Discord Activity panel is the usual one — the tools alone
+    // eat the row and the colours get crushed to a couple of swatches. Give
+    // the colours their own line instead: two comfortable bands beat one
+    // cramped one, and it is the same shape the phone layout uses.
+    toolbar.classList.remove('toolbar-stacked');
+    let chosen = search();
+    if (!fits()) {
+      toolbar.classList.add('toolbar-stacked');
+      // Matching the canvas width is a nicety for the one-line bar. Once the
+      // colours are on their own row, insisting on it only makes that row
+      // taller — and a taller bar takes its height straight out of the
+      // drawing. Let the bar use the whole column instead.
+      toolbar.style.removeProperty('width');
+      chosen = search();
+    }
+
+    // Even the tightest row can be too wide — a very narrow window, or a zoom
+    // level nothing was designed for. The stylesheet already lets the colour
+    // strip shrink and scroll, so there is nothing left to do but say so.
+    // Even stacked, a very small panel can run out of room. The colour strip
+    // scrolls sideways rather than anything leaving the screen.
+    palette.classList.toggle('palette-scrolls', !fits());
   }
 
   // The canvas is locked to 4:3 (the drawing coordinate space is 1000x750)
@@ -3410,7 +3536,7 @@
 
     if (data.user) {
       if (data.user.username) {
-        API.lsSet('mivi_name', data.user.username);
+        Prefs.set('name', data.user.username);
         $('home-name').value = data.user.username;
       }
       // Their Discord picture comes back with the account; the server is the
@@ -3733,7 +3859,7 @@
     const t = themeById(id);
     if (t.id === DEFAULT_THEME) document.documentElement.removeAttribute('data-theme');
     else document.documentElement.setAttribute('data-theme', t.id);
-    API.lsSet('mivi_theme', t.id);
+    Prefs.set('theme', t.id);
 
     const next = THEMES[(THEMES.indexOf(t) + 1) % THEMES.length];
     const btn = $('btn-theme');
@@ -3772,7 +3898,7 @@
     // shrank the words and left every card the same size.
     document.body.style.zoom = String(v / 100);
     $('set-scale-val').textContent = v + '%';
-    API.lsSet('mivi_scale', String(v));
+    Prefs.set('scale', v);
     syncViewportVars();
   }
 
@@ -3781,11 +3907,23 @@
   // up wider than the screen — which is how modal buttons went off the edge.
   function syncViewportVars() {
     const z = uiZoom();
-    const vw = ((window.visualViewport && window.visualViewport.width) || window.innerWidth) / z;
-    const vh = ((window.visualViewport && window.visualViewport.height) || window.innerHeight) / z;
+    const vv = window.visualViewport;
+    const vw = ((vv && vv.width) || window.innerWidth) / z;
+    const vh = ((vv && vv.height) || window.innerHeight) / z;
     const root = document.documentElement.style;
     root.setProperty('--vvw', Math.floor(vw) + 'px');
     root.setProperty('--vvh', Math.floor(vh) + 'px');
+
+    // How much of the screen the on-screen keyboard is covering. The chat
+    // drawer is position:fixed, and a fixed box is anchored to the layout
+    // viewport, which does not shrink when the keyboard opens — so without
+    // this the guess box sits underneath the keys you are typing on.
+    let kb = 0;
+    if (vv) {
+      kb = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
+      if (kb < 80) kb = 0;          // a browser toolbar, not a keyboard
+    }
+    root.setProperty('--kb', Math.round(kb) + 'px');
   }
 
   function uiZoom() {
@@ -3882,8 +4020,28 @@
     } catch (e) { return []; }
   }
 
+  // A list you built in a room is saved to your account as well as to this
+  // browser, so it is on your phone tomorrow. Signed out, the browser copy is
+  // still the whole story — nothing about playing as a guest changes.
+  async function saveListToAccount(name, words) {
+    const acct = window.MiviAccount;
+    if (!acct || !acct.isLoggedIn()) return;
+    const wanted = String(name).toLowerCase();
+    try {
+      const existing = (acct.myLists() || []).find(l => String(l.name).toLowerCase() === wanted);
+      if (existing) await API.updateList(existing.id, { words });
+      else await API.createList(name, words);
+      await acct.refreshLists();
+    } catch (e) {
+      // The browser copy is already saved, so this is a sync failure, not a
+      // lost list. Say so quietly rather than pretending it worked.
+      toast('Saved on this device — could not reach your account.');
+    }
+  }
+
   function rememberList(name, words) {
     if (!name || !Array.isArray(words) || !words.length) return;
+    saveListToAccount(String(name).slice(0, 40), words.slice(0, MY_LIST_WORDS_MAX));
     const entry = {
       name: String(name).slice(0, 40),
       words: words.slice(0, MY_LIST_WORDS_MAX),
@@ -3912,17 +4070,37 @@
     if (!hit) return;
     const clash = String(to).toLowerCase();
     const kept = all.filter(l => l === hit || l.name.toLowerCase() !== clash);
+    const oldName = hit.name;
     hit.name = String(to).slice(0, 40);
     API.lsTrySet(MY_LISTS_KEY, JSON.stringify(kept));
     renderDeviceLists();
+    // Keep the account copy in step, or the old name comes back as a chip
+    // on the next device and re-adds the list twice.
+    const acct = window.MiviAccount;
+    if (acct && acct.isLoggedIn()) {
+      const mine = (acct.myLists() || []).find(l => String(l.name).toLowerCase() === String(oldName).toLowerCase());
+      if (mine) {
+        API.updateList(mine.id, { name: hit.name })
+          .then(() => acct.refreshLists())
+          .catch(() => {});
+      }
+    }
   }
 
-  function forgetList(name) {
+  function forgetList(name, alsoFromAccount) {
     try {
       const all = deviceLists().filter(l => l.name !== name);
       API.lsSet(MY_LISTS_KEY, JSON.stringify(all));
-      renderDeviceLists();
     } catch (e) {}
+    const acct = window.MiviAccount;
+    if (alsoFromAccount && acct && acct.isLoggedIn()) {
+      const mine = (acct.myLists() || []).find(l => String(l.name).toLowerCase() === String(name).toLowerCase());
+      if (mine) {
+        API.deleteList(mine.id).then(() => acct.refreshLists()).catch(() => {});
+        return;
+      }
+    }
+    renderDeviceLists();
   }
 
   // Options are remembered as a whole and re-applied when you make a room.
@@ -3940,7 +4118,7 @@
     try {
       const keep = {};
       for (const k of REMEMBERED_OPTS) if (options[k] !== undefined) keep[k] = options[k];
-      API.lsSet(MY_OPTS_KEY, JSON.stringify(keep));
+      Prefs.set('gameOptions', keep);
     } catch (e) {}
   }
 
@@ -3960,11 +4138,29 @@
 
   // The strip of lists this browser has collected. One click puts one back
   // in the room; the × forgets it.
+  // Everything you can drop into a room in one click: what this browser has
+  // cached, plus every list on your account. An account list has no words
+  // here — the summary endpoint does not send them — so it carries an id and
+  // fetches them when it is actually clicked.
+  function quickLists() {
+    const local = deviceLists().map(l => ({ name: l.name, words: l.words, count: l.words.length }));
+    const seen = new Set(local.map(l => l.name.toLowerCase()));
+    const acct = window.MiviAccount;
+    if (!acct || !acct.isLoggedIn()) return local;
+    for (const l of (acct.myLists() || [])) {
+      const key = String(l.name).toLowerCase();
+      if (seen.has(key)) continue;      // the cached copy already covers it
+      seen.add(key);
+      local.push({ name: l.name, id: l.id, count: l.count, fromAccount: true });
+    }
+    return local;
+  }
+
   function renderDeviceLists() {
     const box = $('wl-saved');
     const row = $('wl-saved-row');
     if (!box || !row) return;
-    const mine = deviceLists();
+    const mine = quickLists();
     const canAdd = !!(gameState && !gameState.managed && gameState.host === myId);
     box.style.display = (mine.length && canAdd) ? 'block' : 'none';
     if (!mine.length || !canAdd) return;
@@ -3979,22 +4175,39 @@
       const chip = el('div', 'saved-chip' + (inRoom.has(l.name.toLowerCase()) ? ' in-room' : ''));
       const use = el('button', 'saved-use');
       use.appendChild(el('span', 'saved-name', l.name));
-      use.appendChild(el('span', 'saved-count', l.words.length + ''));
+      use.appendChild(el('span', 'saved-count', (l.count || 0) + ''));
       use.title = inRoom.has(l.name.toLowerCase())
         ? l.name + ' is already in this room'
-        : 'Add ' + l.name + ' to this room';
+        : 'Add ' + l.name + ' to this room' + (l.fromAccount ? ' (saved on your account)' : '');
       use.disabled = inRoom.has(l.name.toLowerCase());
-      use.onclick = () => {
-        socket.emit('addCustomList', { name: l.name, text: l.words.join('\n') });
+      use.onclick = async () => {
         sfx('click');
+        let words = l.words;
+        if (!words && l.id) {
+          // Account lists arrive as summaries; fetch the words on demand
+          // rather than pulling every list down to draw a strip of chips.
+          use.disabled = true;
+          try { words = (await API.getList(l.id)).list.words; }
+          catch (e) { toast('Could not load that list — ' + e.message); use.disabled = false; return; }
+          use.disabled = false;
+        }
+        if (!words || !words.length) return;
+        socket.emit('addCustomList', { name: l.name, text: words.join('\n') });
       };
       chip.appendChild(use);
 
       const drop = el('button', 'saved-drop', '✕');
-      drop.title = 'Forget ' + l.name + ' on this device';
+      const onAccount = !!l.fromAccount || !!(window.MiviAccount && window.MiviAccount.isLoggedIn()
+        && (window.MiviAccount.myLists() || []).some(a => String(a.name).toLowerCase() === l.name.toLowerCase()));
+      drop.title = onAccount ? 'Remove ' + l.name : 'Forget ' + l.name + ' on this device';
       drop.onclick = async () => {
-        if (!await MiviDialog.confirm(`Forget "${l.name}" on this device? It stays in any room that already has it.`, { confirmLabel: 'Forget', danger: true })) return;
-        forgetList(l.name);
+        // Deleting it from the account is not the same as clearing the
+        // browser copy, so ask which one is meant rather than guessing.
+        const question = onAccount
+          ? `Delete "${l.name}" from your account? It will go from every device. It stays in any room that already has it.`
+          : `Forget "${l.name}" on this device? It stays in any room that already has it.`;
+        if (!await MiviDialog.confirm(question, { confirmLabel: onAccount ? 'Delete' : 'Forget', danger: true })) return;
+        forgetList(l.name, onAccount);
       };
       chip.appendChild(drop);
       row.appendChild(chip);
@@ -5214,6 +5427,28 @@
     renderAvatarBubble();
     syncAudioUI();
 
+    // Signing in on a new device (or changing a setting on another one) hands
+    // this browser the account's copy. Repaint whatever actually changed —
+    // the values are already in localStorage by the time this runs.
+    Prefs.onAdopt((changed) => {
+      if (changed.includes('theme')) applyTheme(Prefs.get('theme', DEFAULT_THEME));
+      if (changed.includes('scale')) {
+        const v = Prefs.get('scale', defaultScale());
+        $('set-scale').value = v;
+        applyScale(v);
+      }
+      if (changed.includes('name')) {
+        const n = Prefs.get('name', '');
+        if (n && !nameTouched) $('home-name').value = n;
+      }
+      if (changed.includes('avatar')) renderAvatarBubble();
+      if (changed.some(k => k.startsWith('music') || k.startsWith('sfx'))) {
+        try { Audio.reloadPreferences(); } catch (e) {}
+        syncAudioUI();
+      }
+      toast('⚙️ Settings synced from your account');
+    });
+
     // Somebody shared a word list with us?
     const params = new URLSearchParams(location.search);
     const sharedToken = params.get('list');
@@ -5255,8 +5490,18 @@
       // Reconnect only when the auth token actually changed (list refreshes
       // fire this too) and we're not seated in a room.
       if (!roomCode && API.token() !== socketToken) connectSocket();
+      else if (roomCode && API.token() !== socketToken && window.MiviAccount.isLoggedIn()) {
+        // Your seat and score belong to the connection you joined with, so
+        // swapping identity mid-game would drop them. The account takes over
+        // on the next game — say so rather than letting the round's points
+        // quietly go nowhere.
+        toast('Signed in — this game still counts as your guest seat.');
+      }
+      // Account lists appear in the lobby strip, so redraw it when they land.
+      renderDeviceLists();
       if (gameState?.state === 'lobby') updateLobby();
-      // Prefill name from account.
+      // Your account name is your name unless you have typed something else.
+      syncNameFromAccount();
       const u = window.MiviAccount.user();
       if (u && !$('home-name').value) $('home-name').value = u.username;
     });
@@ -5282,9 +5527,10 @@
       if (!code) { $('home-error').textContent = 'Type a room code first.'; return; }
       socket.emit('joinRoom', { code, name: ensureName(), avatar: myAvatar() });
     }
+    $('home-name').addEventListener('input', () => { nameTouched = true; });
     $('home-name').addEventListener('change', () => {
       const n = myName();
-      if (n) { API.lsSet('mivi_name', n); socket.emit('updateProfile', { name: n }); }
+      if (n) { Prefs.set('name', n); socket.emit('updateProfile', { name: n }); }
     });
     $('avatar-bubble').addEventListener('click', () => {
       const p = $('avatar-picker');
@@ -5683,6 +5929,40 @@
     });
     $('modal-gamesettings').querySelector('.modal-x').addEventListener('click', closeGameSettings);
     window.addEventListener('resize', () => requestAnimationFrame(() => { syncViewportVars(); fitCanvas(); }));
+    // A phone opening its keyboard does not fire `resize` — it changes the
+    // visual viewport instead. Without this the layout never learns that half
+    // the screen just disappeared under the keys.
+    if (window.visualViewport) {
+      const onVV = () => requestAnimationFrame(() => { syncViewportVars(); fitCanvas(); });
+      window.visualViewport.addEventListener('resize', onVV);
+      window.visualViewport.addEventListener('scroll', onVV);
+    }
+    window.addEventListener('orientationchange', () => {
+      // The new dimensions are not readable until after the rotation settles.
+      setTimeout(() => { syncViewportVars(); fitCanvas(); }, 250);
+    });
+    // A resize is not the only thing that changes how much room the canvas
+    // column has. The players list and the chat arrive over the socket after
+    // the screen is already up, and the side columns take their width from
+    // what is in them — so the middle column narrows a moment after fitCanvas
+    // has already sized the toolbar for a wider one, and the colours end up
+    // spilling over the panel beside them. Watch the column itself.
+    if (window.ResizeObserver) {
+      let lastW = 0, lastH = 0, queued = false;
+      const ro = new ResizeObserver((entries) => {
+        const box = entries[0] && entries[0].contentRect;
+        if (!box) return;
+        // Re-fitting changes the toolbar's height, which would notify us
+        // again forever. Only a real change in the space available counts.
+        if (Math.abs(box.width - lastW) < 2 && Math.abs(box.height - lastH) < 2) return;
+        lastW = box.width; lastH = box.height;
+        if (queued) return;
+        queued = true;
+        requestAnimationFrame(() => { queued = false; fitCanvas(); });
+      });
+      const card = $('canvas-card');
+      if (card) ro.observe(card);
+    }
     syncViewportVars();
     $('btn-lobby-friends').addEventListener('click', () => window.MiviAccount.openAccount('friends'));
     $('invite-join').addEventListener('click', acceptInvite);

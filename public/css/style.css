@@ -2206,8 +2206,22 @@ body.in-game .timer-wrap, body.in-game .timer-ring { width: 48px; height: 48px; 
 body.in-game .timer-num { font-size: 0.95rem; }
 
 /* The colours can never leave the screen again: the palette wraps to the
-   width it actually has instead of demanding 23 rigid columns. */
-body.in-game .palette { display: flex; flex-wrap: wrap; gap: 3px; justify-content: center; max-width: 560px; min-width: 0; }
+   width it actually has instead of demanding 23 rigid columns.
+
+   It wraps as a GRID, not a flex row. A swatch is sized `width: 100%`, which
+   in a grid means "fill your track" and in a flex row means "as wide as the
+   whole palette" — so the flex version this used to be gave every one of the
+   46 colours its own full-width line. On a phone that made the toolbar
+   17,000 pixels tall and pushed the tools, the chat and everything else
+   clean off the bottom of the screen. */
+body.in-game .palette {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(22px, 1fr));
+  gap: 3px;
+  justify-content: center;
+  max-width: 560px;
+  min-width: 0;
+}
 
 /* ══════════ Batch 30 — themed scrollbars + inline list odds ══════════ */
 
@@ -2272,8 +2286,41 @@ body.in-game .palette { display: flex; flex-wrap: wrap; gap: 3px; justify-conten
     flex-wrap: nowrap;
     gap: var(--tb-gap, 12px);
     padding: 8px var(--tb-pad, 16px);
+    /* fitToolbar() gives the bar an inline width taken from the canvas above
+       it. If that is ever more than the card can actually give, the bar must
+       stop at the card rather than pushing the page sideways. */
+    max-width: 100%;
   }
   body.in-game .toolbar > * { flex-shrink: 0; }
+
+  /* …except the colours, which are always the thing that gives.
+     fitToolbar() picks a size from the width the bar has at that instant, but
+     that width is itself downstream of the size it picks: the canvas is sized
+     from the space left by the toolbar, the middle column from the canvas, and
+     the toolbar from the middle column. The loop does not always settle where
+     it started, and when it did not, a non-shrinkable palette walked straight
+     off the right-hand edge of the screen.
+     Letting the colour strip shrink and scroll makes that impossible whatever
+     the arithmetic decides: the tools stay a row, the bar stays inside the
+     card, and at worst the last few colours are a short swipe away. */
+  body.in-game .toolbar > .palette {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+  }
+  body.in-game .toolbar > .palette::-webkit-scrollbar { display: none; }
+
+  /* Two bands instead of one cramped line: the tools on top, the colours
+     across the full width below. fitToolbar() switches this on when the
+     colours cannot all be shown on a single row — a Discord Activity panel on
+     a desktop is the case that needs it. */
+  body.in-game .canvas-card .toolbar.toolbar-stacked { flex-wrap: wrap; row-gap: 10px; }
+  body.in-game .toolbar.toolbar-stacked > .palette {
+    flex: 1 0 100%;
+    justify-content: center;
+  }
 
   body.in-game .tool-btn {
     width: var(--tb-btn, 38px); height: var(--tb-btn, 38px);
@@ -2284,6 +2331,16 @@ body.in-game .palette { display: flex; flex-wrap: wrap; gap: 3px; justify-conten
   body.in-game .size-dot { width: var(--tb-dot, 34px); height: var(--tb-dot, 34px); }
   body.in-game .tool-sep { height: var(--tb-dot, 34px); }
 
+  /* The custom-colour button spans the whole height of its own column at
+     the front of the grid — fitToolbar sets the tracks — so the three colour
+     families stay three clean rows instead of one button starting a fourth. */
+  body.in-game .palette .swatch.rainbow {
+    grid-column: 1; grid-row: 1 / -1;
+    width: calc(var(--sw, 22px) * 1.3); min-height: 0;
+    /* Span the full height of the three families. aspect-ratio would fight
+       the row span and keep it square. */
+    height: auto; align-self: stretch; aspect-ratio: auto;
+  }
   /* A fixed grid, so the palette's shape is the same at every zoom. */
   body.in-game .palette {
     display: grid;
@@ -2435,3 +2492,455 @@ body.in-game .palette { display: flex; flex-wrap: wrap; gap: 3px; justify-conten
 /* The M badge explains itself on hover (title="Moderator"), so point at it
    with the cursor people expect for that. */
 .mod-chip { cursor: help; }
+
+/* ══════════ Batch 38 — the phone layout, rebuilt ══════════ */
+
+/* This section is deliberately last. The phone breakpoint at the top of the
+   file had been quietly overruled for a long time: every later batch declared
+   the same properties unconditionally, at equal or higher specificity, so a
+   390px screen was being laid out with desktop padding, desktop type and
+   desktop density. Rather than unpick a thousand lines of history, the mobile
+   rules now come last and say what they mean.
+
+   Three things were actually broken, not merely cramped:
+
+     · Every colour swatch rendered at the full width of the palette, one per
+       line. Forty-six lines. The toolbar came out roughly seventeen thousand
+       pixels tall and pushed the tools, the players and the chat off the
+       bottom of a screen that could not scroll. That is fixed at its source
+       (see the palette rule in Batch 29) and re-stated here.
+     · body.in-game turns page scrolling off, so anything that did not fit was
+       simply unreachable.
+     · The chat sat inline and ate a third of the screen, on the screen with
+       the least to spare. */
+
+/* ── Safe areas ──
+   index.html asks for viewport-fit=cover, which deliberately extends the page
+   under the notch and the home indicator. Nothing compensated for that, so on
+   any modern phone the top of the word bar sat under the status bar and the
+   bottom of the toolbar under the home indicator. */
+:root {
+  --safe-t: env(safe-area-inset-top, 0px);
+  --safe-r: env(safe-area-inset-right, 0px);
+  --safe-b: env(safe-area-inset-bottom, 0px);
+  --safe-l: env(safe-area-inset-left, 0px);
+}
+
+@media (max-width: 900px) {
+
+  /* ── Room to breathe ──
+     The whole point of the complaint. Smaller type and tighter boxes are not
+     what makes a phone feel roomy — fewer things fighting for the same space
+     is. Padding goes UP, not down; what comes down is how much is on screen
+     at once. */
+  #main { padding: 10px 12px calc(20px + var(--safe-b)); }
+  .card { padding: 14px; border-radius: 16px; }
+  .hero { padding: 16px 0 12px; }
+  .home-grid { gap: 12px; }
+  .modal { padding: 20px 16px calc(24px + var(--safe-b)); }
+
+  /* The lobby is one column. It had been re-pinned to a fixed 360px sidebar
+     plus a second column by a later batch, which alone needs more width than
+     the phone has. */
+  .lobby-grid,
+  .lobby-grid.guest { grid-template-columns: minmax(0, 1fr); }
+  .lobby-grid > *,
+  .lobby-grid.guest > * { grid-column: 1; min-width: 0; }
+  .players-card-lobby,
+  .chat-card-lobby { grid-row: auto; min-height: 0; }
+  .chat-card-lobby { max-height: 46vh; }
+
+  /* ── The play screen ──
+     One column that fits the screen exactly: word bar, canvas, tools, the
+     player strip. Chat is a drawer rather than a fourth thing competing for
+     the same vertical inch. */
+  body.in-game #main {
+    padding: calc(6px + var(--safe-t)) 8px calc(6px + var(--safe-b));
+    /* A safety valve. The column is built to fit, but a very short screen, a
+       large system font or an extra row of tools must never make part of the
+       game unreachable — which is exactly what overflow:hidden did. */
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  body.in-game #screen-game.active { display: flex; flex-direction: column; min-height: 0; }
+  body.in-game .game-grid { display: flex; flex-direction: column; gap: 8px; flex: 1; min-height: 0; }
+
+  /* Word bar: the one thing that must always be legible.
+     Four things — the round, the player count, the word and the clock — do not
+     fit across a phone, and the word was the one that lost: squeezed into a
+     sliver and clipped mid-letter. Give it a line of its own underneath. */
+  body.in-game .game-top {
+    flex: 0 0 auto; padding: 8px 10px; margin-bottom: 0;
+    flex-wrap: wrap; column-gap: 10px; row-gap: 6px;
+  }
+  body.in-game .game-top .word-wrap {
+    order: 1; flex: 1 0 100%; min-height: 34px; max-width: 100%;
+  }
+  body.in-game .game-top .timer-wrap { margin-left: auto; }
+  /* A long word used to wrap into a block of tiles three rows deep, which
+     reads as a crossword rather than a word. Keep it to one line: the tiles
+     are smaller, and a really long word scrolls sideways. */
+  body.in-game .word-tiles {
+    flex-wrap: nowrap; gap: 3px; max-width: 100%;
+    overflow-x: auto; overscroll-behavior-x: contain;
+    scrollbar-width: none; padding-bottom: 2px;
+  }
+  body.in-game .word-tiles::-webkit-scrollbar { display: none; }
+  body.in-game .tile {
+    min-width: 18px; height: 30px; font-size: 0.95rem;
+    padding-left: 3px; padding-right: 3px; flex: 0 0 auto;
+  }
+  body.in-game .timer-wrap, body.in-game .timer-ring { width: 44px; height: 44px; }
+  body.in-game .round-pill { font-size: 0.8rem; padding: 5px 12px; }
+
+  /* Canvas: as big as the width allows, and it goes first. */
+  body.in-game .canvas-card {
+    order: 1; flex: 0 0 auto; min-height: 0;
+    padding: 0; gap: 8px; background: transparent; border: 0; box-shadow: none;
+  }
+  body.in-game .canvas-card .canvas-frame { margin: 0 auto; width: 100%; max-width: 100%; }
+
+  /* Players: a single scrolling strip under the canvas. It keeps a clear
+     corner on the right, because that is where the floating chat button sits
+     and a button that covers a player is a button in the way. */
+  body.in-game .players-card {
+    order: 3; flex: 0 0 auto; padding: 6px 8px;
+    padding-right: 66px;
+  }
+  body.in-game .players-card .card-title-row { display: none; }
+
+  /* ── Tools ──
+     Two bands: the buttons, then the colours. Everything is a real touch
+     target — 44px is the size a finger actually needs, and the old 34px
+     buttons are why the tools felt fiddly even when they were on screen. */
+  body.in-game .canvas-card .toolbar {
+    order: 2;
+    display: flex; flex-wrap: wrap; align-items: center; justify-content: center;
+    width: 100%; max-width: 100%; min-width: 0;
+    gap: 10px; padding: 10px 8px;
+    background: var(--card); border: 1px solid var(--line); border-radius: 16px;
+  }
+  body.in-game .toolbar > * { flex-shrink: 1; }
+  body.in-game .toolbar .tool-sep { display: none; }
+
+  body.in-game .toolbar .tool-group {
+    display: flex; flex-wrap: wrap; justify-content: center;
+    /* Tight enough that the seven drawing tools stay on one line at 390px
+       (7 × 44 + 6 × 6 = 344 in 346 of usable width) instead of stranding the
+       last one on a row of its own, which made the bar look accidental. */
+    gap: 6px;
+    padding: 0; background: none; border: 0;
+  }
+  body.in-game .tool-btn {
+    /* 44px is the target; the shrink is what stops a 375px screen breaking the
+       row for the sake of a single pixel and stranding the last tool on a line
+       of its own. It never goes below 40, which is still a real target. */
+    flex: 0 1 44px;
+    width: 44px; height: 44px; min-width: 40px; min-height: 44px;
+    border-radius: 12px; font-size: 1.15rem;
+  }
+  body.in-game .size-dots {
+    display: flex; flex-wrap: nowrap; justify-content: center; gap: 8px;
+    padding: 0; background: none; border: 0;
+  }
+  body.in-game .size-dot { width: 40px; height: 40px; min-width: 40px; }
+  body.in-game .tool-sep { display: none; }
+
+  /* ── The colours ──
+     Forty-five colours are three designed families of fifteen — darks,
+     brights, pastels — so they stay three rows, and a row stays a family.
+     Fifteen touch-sized swatches are wider than a phone, so the strip
+     scrolls sideways rather than either shrinking the swatches to pinheads
+     or reflowing the families into a soup. */
+  body.in-game .toolbar > .palette {
+    flex: 1 1 100%;            /* always its own band, never beside the tools */
+    display: grid;
+    grid-template-columns: repeat(15, 30px);
+    grid-auto-rows: 30px;
+    gap: 5px;
+    justify-content: start;
+    max-width: 100%;
+    min-width: 0;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+    padding-bottom: 2px;
+  }
+  body.in-game .toolbar > .palette::-webkit-scrollbar { display: none; }
+  body.in-game .toolbar > .palette .swatch {
+    width: 30px; height: 30px; min-width: 30px;
+    border-radius: 7px; aspect-ratio: auto;
+  }
+  /* The custom-colour button is the 46th swatch, so left to itself it starts
+     a fourth row for one button. Pin it to its own full-height column at the
+     start instead: three rows of fifteen for the three families, and a tall
+     custom-colour key beside them that stays put while the rest scrolls. */
+  body.in-game .toolbar > .palette {
+    grid-template-columns: 34px repeat(15, 30px);
+    grid-template-rows: repeat(3, 30px);
+  }
+  body.in-game .toolbar > .palette .swatch.rainbow {
+    grid-column: 1; grid-row: 1 / -1;
+    width: 34px; height: auto; min-width: 34px;
+    position: sticky; left: 0; z-index: 2;
+    box-shadow: 6px 0 10px -6px rgba(0, 0, 0, .4);
+  }
+
+  /* ── Chat is a drawer ──
+     It used to sit in the column and take a third of the screen, on the
+     screen with the least to give. The drawer, its toggle and its close
+     button all already existed — they were just scoped to fullscreen only. */
+  body.in-game .chat-card {
+    position: fixed; top: 0; right: 0; bottom: 0; z-index: 220;
+    width: min(360px, 92vw); height: 100%; min-height: 0;
+    border-radius: 18px 0 0 18px;
+    padding: calc(14px + var(--safe-t)) 14px calc(14px + var(--safe-b));
+    transform: translateX(105%); transition: transform .25s ease;
+    box-shadow: -10px 0 30px rgba(0, 0, 0, .22);
+  }
+  body.in-game .chat-card.open { transform: none; }
+  body.in-game .chat-head .chat-close { display: block; }
+  body.in-game .float-chat-toggle {
+    display: flex; align-items: center; justify-content: center;
+    right: calc(14px + var(--safe-r)); bottom: calc(14px + var(--safe-b));
+    width: 54px; height: 54px; padding: 0; border-radius: 50%;
+  }
+  /* Guessing is the game, so the box you type into is never small. */
+  body.in-game .chat-input-row input { font-size: 16px; height: 46px; }
+  body.in-game .send-btn { width: 54px; height: 46px; }
+
+  /* ── The word picker ──
+     It lives inside the canvas frame, so it was capped at 62% of a box that
+     the toolbar bug had already squashed to 320x240 — five words in about a
+     hundred pixels of scroll. It now gets the whole frame, scrolls if it
+     needs to, and sits above the floating like/skip buttons instead of
+     underneath them. */
+  .canvas-overlay { padding: 14px 12px; z-index: 30; }
+  #overlay-choice { z-index: 32; }
+  #overlay-choice .word-choice-grid {
+    max-height: none; width: 100%;
+    display: flex; flex-direction: column; gap: 8px;
+    overflow-y: auto; overscroll-behavior: contain;
+  }
+  #overlay-choice .word-choice-grid { gap: 6px; }
+  #overlay-choice .word-choice {
+    /* All five choices plus the heading have to fit inside the canvas frame
+       without scrolling — a word you cannot see is a word you cannot pick. */
+    width: 100%; min-height: 44px; padding: 10px 14px; font-size: 1rem;
+  }
+  #overlay-choice h2 { font-size: 1.05rem; margin-bottom: 8px; }
+  /* The like, skip and fullscreen buttons used to paint over the picker,
+     because they sit at z-index 12 and the overlay sat at 10. Raising the
+     overlay is the whole fix — hiding the buttons instead would hide them for
+     the entire round, since #overlay-choice is always in the DOM and only its
+     inline display changes. */
+
+  /* Floating buttons clear the home indicator. */
+  .float-actions { bottom: calc(10px + var(--safe-b)); }
+  .toast, .invite-toast { bottom: calc(14px + var(--safe-b)); max-width: min(94vw, 420px); }
+
+  /* Fullscreen mode gets the same insets. */
+  body.focus-mode #screen-game {
+    padding: calc(6px + var(--safe-t)) calc(6px + var(--safe-r))
+             calc(6px + var(--safe-b)) calc(6px + var(--safe-l));
+  }
+}
+
+/* ── Landscape on a phone ──
+   Height is the scarce thing, not width. The canvas is capped by height and
+   the column is allowed to scroll, rather than everything being crushed into
+   a few hundred pixels. */
+@media (max-width: 900px) and (orientation: landscape) and (max-height: 520px) {
+  /* A phone on its side is wide and very short, so stacking canvas-over-tools
+     is the wrong shape entirely — it was pushing the colours off the bottom.
+     Put the tools BESIDE the drawing and the height problem disappears. */
+  body.in-game .game-top { padding: 4px 8px; row-gap: 2px; }
+  body.in-game .game-top .word-wrap { min-height: 26px; }
+  body.in-game .timer-wrap, body.in-game .timer-ring { width: 34px; height: 34px; }
+  body.in-game .tile { height: 24px; min-width: 16px; font-size: 0.85rem; }
+
+  body.in-game .canvas-card {
+    flex-direction: row; align-items: center; justify-content: center;
+    gap: 8px; flex: 1 1 auto; min-height: 0;
+  }
+  /* With aspect-ratio set, a definite HEIGHT is what derives the width.
+     width:auto with only a max-height let it shrink-to-fit to nothing —
+     which is how this ended up a three-pixel canvas. */
+  body.in-game .canvas-card .canvas-frame {
+    height: 100%; width: auto; max-width: 64%; max-height: 100%; margin: 0;
+  }
+  body.in-game .canvas-card .toolbar {
+    flex: 0 1 auto; width: auto; max-width: 36%;
+    align-content: center; gap: 8px; padding: 8px;
+  }
+  body.in-game .tool-btn { flex-basis: 40px; width: 40px; height: 40px; min-height: 40px; }
+  body.in-game .size-dot { width: 34px; height: 34px; min-width: 34px; }
+  body.in-game .toolbar > .palette {
+    grid-template-columns: 28px repeat(15, 24px);
+    grid-template-rows: repeat(3, 24px);
+    gap: 4px;
+  }
+  body.in-game .toolbar > .palette .swatch { width: 24px; height: 24px; min-width: 24px; }
+  body.in-game .toolbar > .palette .swatch.rainbow { width: 28px; min-width: 28px; }
+  body.in-game .players-card { display: none; }   /* the strip is the first thing to go */
+}
+
+/* ── Short screens ──
+   An iPhone SE is 667px tall. Word bar + a full-width 4:3 canvas + two bands
+   of tools + the player strip does not fit in that, so the canvas gives up a
+   little height rather than the tools disappearing under the fold. */
+@media (max-width: 900px) and (max-height: 720px) and (orientation: portrait) {
+  body.in-game .canvas-card .canvas-frame {
+    height: 31dvh; width: auto; max-width: 100%; max-height: none;
+  }
+  body.in-game .canvas-card { align-items: center; }
+  /* And everything else comes in a notch, so the last row of colours and the
+     player strip stay above the fold rather than needing a scroll. */
+  body.in-game .game-top { padding: 6px 8px; }
+  body.in-game .tool-btn { flex-basis: 40px; width: 40px; height: 40px; min-height: 40px; }
+  body.in-game .size-dot { width: 34px; height: 34px; min-width: 34px; }
+  body.in-game .canvas-card .toolbar { gap: 8px; padding: 8px; }
+  body.in-game .toolbar > .palette {
+    grid-template-columns: 30px repeat(15, 26px);
+    grid-template-rows: repeat(3, 26px);
+    gap: 4px;
+  }
+  body.in-game .toolbar > .palette .swatch { width: 26px; height: 26px; min-width: 26px; }
+  body.in-game .toolbar > .palette .swatch.rainbow { width: 30px; min-width: 30px; }
+  body.in-game .players-card { padding: 4px 8px; }
+}
+
+/* ── Very small phones ──
+   A 320px screen cannot take a 44px grid and a 30px palette at once. Give up
+   a little size rather than letting anything overflow. */
+@media (max-width: 360px) {
+  body.in-game #main { padding-left: 6px; padding-right: 6px; }
+  body.in-game .tool-btn { width: 40px; height: 40px; min-width: 40px; min-height: 40px; }
+  body.in-game .size-dot { width: 36px; height: 36px; min-width: 36px; }
+  body.in-game .toolbar { gap: 8px; padding: 8px; }
+  body.in-game .toolbar > .palette {
+    grid-template-columns: repeat(15, 28px); grid-auto-rows: 28px;
+  }
+  body.in-game .toolbar > .palette .swatch { width: 28px; height: 28px; min-width: 28px; }
+}
+
+/* ── Touch devices of any width ──
+   Hover is not a thing a finger can do, so the swatch grow-on-hover only ever
+   fired after a tap and left the wrong colour looking selected. */
+@media (hover: none) {
+  .swatch:hover { transform: none; }
+  .tool-btn, .size-dot, .swatch, .icon-btn, .mini-btn { -webkit-tap-highlight-color: transparent; }
+}
+
+/* ══════════ Batch 39 — the gaps Batch 38 left ══════════ */
+
+/* ── The canvas keeps its shape in fullscreen ──
+   Batch 38's `body.in-game .canvas-card .canvas-frame { width: 100% }` is more
+   specific than the fullscreen rule, and a definite width plus flex-sized
+   height over-determines the box: aspect-ratio is ignored and the drawing
+   stretches. Fullscreen sizes itself; stay out of its way. */
+@media (max-width: 900px) {
+  /* Fullscreen is not an edge case on a phone: a Discord Activity turns it on
+     by itself, so this IS the phone layout inside Discord.
+     The frame is `flex: 1` of the canvas card, but the card had no height of
+     its own — it sized to its contents, which is the frame. Each waited for
+     the other and the drawing collapsed to three pixels by two. Give the card
+     the height and the frame can take its share of it. */
+  body.in-game.focus-mode .game-grid { flex: 1 1 auto; min-height: 0; }
+  body.in-game.focus-mode .canvas-card {
+    flex: 1 1 auto; min-height: 0;
+    display: flex; flex-direction: column; align-items: center; gap: 8px;
+    padding: 0; background: transparent; border: 0; box-shadow: none;
+  }
+  /* fitCanvas() works out how wide the drawing may be and publishes it as
+     --canvas-max; aspect-ratio then gives the height. One definite dimension
+     is the only way a 4:3 box keeps its shape. */
+  body.in-game.focus-mode .canvas-card .canvas-frame {
+    flex: 0 0 auto;
+    width: 100%; height: auto; max-height: none;
+    max-width: var(--canvas-max, 100%);
+    margin: 0 auto; align-self: center;
+  }
+  body.in-game.focus-mode .canvas-card .toolbar { flex: 0 0 auto; }
+  /* Fullscreen lifts the play screen out of #main with position:fixed, so
+     #main's scroll safety valve never applies to it. Give it its own. */
+  body.focus-mode #screen-game { overflow-y: auto; overscroll-behavior-y: contain; }
+}
+
+/* ── The 901–1080px band ──
+   Too wide for the phone layout, too narrow for the desktop toolbar sizing
+   (fitToolbar bails out below 1081), and pinned to one unscrollable viewport
+   by the same two rules that trapped the phone. A tablet in portrait lands
+   here. At minimum, nothing may be unreachable. */
+@media (min-width: 901px) and (max-width: 1080px) {
+  body.in-game #main { overflow-y: auto; -webkit-overflow-scrolling: touch; }
+  body.in-game .toolbar { flex-wrap: wrap; justify-content: center; gap: 10px; }
+  body.in-game .toolbar > .palette { min-width: 0; max-width: 100%; }
+  body.in-game .tool-btn { width: 40px; height: 40px; }
+  body.in-game .size-dot { width: 36px; height: 36px; }
+}
+
+/* ── The soft keyboard ──
+   The chat drawer is position:fixed, and on iOS a fixed box is anchored to the
+   layout viewport, which does not shrink when the keyboard opens. The guess
+   box — the thing the player is typing into — ends up underneath it. app.js
+   measures the gap with visualViewport and publishes it here. */
+@media (max-width: 900px) {
+  body.in-game .chat-card {
+    padding-bottom: calc(14px + var(--safe-b) + var(--kb, 0px));
+    transition: transform .25s ease, padding-bottom .18s ease;
+  }
+}
+
+/* ── Touch targets outside the toolbar ──
+   Batch 38 fixed the drawing tools and stopped there. Everything else on a
+   phone was still built for a mouse — including the close button on the chat
+   drawer, which at 23 pixels was the only way out of it. */
+@media (max-width: 900px) {
+  .mini-btn { padding: 10px 14px; font-size: 0.85rem; min-height: 40px; }
+  .chat-head .chat-close { min-width: 44px; min-height: 44px; padding: 0 12px; font-size: 1rem; }
+  .modal-x { width: 44px; height: 44px; font-size: 1.1rem; }
+  .icon-btn { width: 42px; height: 42px; }
+  .tab { padding: 12px 14px; min-height: 44px; }
+  .lib-tag { padding: 9px 14px; min-height: 38px; }
+  .float-btn { padding: 11px 15px; min-height: 44px; }
+  .p-row .addf { width: 30px; height: 30px; }
+  .p-row .votekick { padding: 6px 10px; min-height: 32px; }
+  .avatar-emojis button { min-width: 44px; min-height: 44px; }
+  .theme-chip { min-height: 44px; }
+  .word-choice { min-height: 44px; }
+  .send-btn { min-height: 46px; }
+}
+
+/* ── iOS stops zooming the page when an input is focused ──
+   Safari zooms whenever the focused field is under 16px, and two later, more
+   specific rules were still dropping below it. */
+@media (max-width: 900px) {
+  input, textarea, select,
+  .input, .chat-input-row input, .lib-search .input, .opt-val-input {
+    font-size: 16px;
+  }
+}
+
+/* ── Hover is not something a finger does ──
+   A tap leaves :hover stuck on, so every hover transform stayed applied to
+   whatever was touched last — the button you pressed kept floating. */
+@media (hover: none) {
+  .tool-btn:hover, .size-dot:hover, .float-btn:hover, .swatch:hover,
+  .avatar-emojis button:hover, .avatar-bubble:hover, .scene-card:hover,
+  .room-pill-btn:hover, .icon-btn:hover, .mini-btn:hover, .theme-chip:hover,
+  .word-choice:hover, .btn:hover, .p-row:hover {
+    transform: none;
+  }
+}
+
+/* ── The player strip scrolls one way, not two ──
+   The phone strip is a single horizontal row, but a later unconditional rule
+   left a vertical scroll axis on it as well, so it could be dragged up and
+   down over nothing. */
+@media (max-width: 900px) {
+  body.in-game .players-list {
+    flex: 0 0 auto; overflow-y: hidden; overflow-x: auto;
+    flex-direction: row; flex-wrap: nowrap;
+  }
+}

@@ -9,9 +9,37 @@ npm install
 npm start          # → http://localhost:3000
 ```
 
-Dev auto-reload: `npm run dev`. End-to-end smoke test (285 checks, runs against its own temp data dir): `npm run smoke`.
+Needs **Node 22.5 or newer** (24 is what it is tested on) — the built-in SQLite
+module arrived in 22.5, and that is what the game stores its data in when you
+have not pointed it at a Postgres.
 
-Player data (accounts, lists, gallery PNGs, the shared library, friends) lives in `data/` — delete the folder to reset everything.
+Dev auto-reload: `npm run dev`. End-to-end smoke test (421 checks, including a
+kill-the-server-and-start-it-again persistence run, its own database and a
+phone-layout pass): `npm run smoke`.
+
+## Where the data lives
+
+Everything a player owns — their account, session, word lists, saved drawings,
+the shared library, friends, stats and settings — is kept in a **database**.
+Which one it picks is decided by a single environment variable:
+
+| `DATABASE_URL` | Backend | Use it for |
+| --- | --- | --- |
+| set to a `postgres://…` URL | **Postgres** | Anything deployed. Survives redeploys, which a container filesystem does not. |
+| not set | **SQLite**, a file at `data/mivimoose.db` | Local development. Nothing to install, nothing to configure. |
+
+Both are the same schema and the same code path — the only difference is where
+the rows end up. Drawings are stored **in** the database as well, not as loose
+files, because a gallery that lives on a container disk is a gallery that
+disappears on the next deploy.
+
+**Upgrading from an older build?** Nothing to do. The first time the new server
+starts it finds the old `data/db.json`, carries every account, list, drawing,
+shared list, friendship and session across, and records that it has done so.
+Existing sessions keep working — nobody is signed out. The old file is left
+exactly where it is, as a backup.
+
+To reset everything: delete `data/` (SQLite), or drop the tables (Postgres).
 
 ## Sign-in with Discord (2-minute setup)
 
@@ -89,11 +117,46 @@ Railpack builds this straight from `package.json` — no config files needed —
 
 Three things to set on the Railway service:
 
-1. **Attach a volume, or your data will vanish.** Accounts, word lists, saved drawings, the shared library and friends all live on disk under `data/`, and Railway's filesystem resets on every redeploy. Add a volume, then point `MIVI_DATA_DIR` at its mount path (e.g. `/data`).
+1. **Add a Postgres, or your data will vanish.** In the Railway project hit
+   **New → Database → Add PostgreSQL**, then on the *game* service add a
+   variable `DATABASE_URL` with the value `${{Postgres.DATABASE_URL}}`
+   (Railway substitutes the real connection string). That is the whole setup —
+   the server creates its own tables on first boot.
+
+   Railway's filesystem is wiped on every redeploy, so without this the game
+   comes back with no accounts, no lists and no drawings each time you push.
+   That is what "nothing saves" looks like. A volume works too — leave
+   `DATABASE_URL` unset and point `MIVI_DATA_DIR` at the mount path — but a
+   volume pins the service to one instance and one region, and the Postgres
+   route is both easier and easier to back up.
 2. **`BASE_URL`** — your public URL, no trailing slash (e.g. `https://yourgame.up.railway.app`). Discord sign-in builds its redirect from this.
 3. **`DISCORD_CLIENT_ID` and `DISCORD_CLIENT_SECRET`** as service variables — `config.json` is gitignored, so it never ships. Then add `https://yourgame.up.railway.app/api/auth/discord/callback` to the redirects on your Discord app.
 
 `PORT` is injected by Railway and the server already honours it. Without the Discord variables the game still runs fine — sign-in just stays switched off and everyone plays as a guest.
+
+The server prints which database it opened as it starts, so a misconfigured
+`DATABASE_URL` is obvious rather than silent:
+
+```
+🎨 Mivimoose Draw running on http://localhost:3000
+🗄️  Database: Postgres
+```
+
+**Keep it to one instance.** The game holds its data in memory and writes
+through to the database, which is what keeps the game loop fast. Two replicas
+sharing one database would overwrite each other; the server notices and says
+so at startup. Scale up rather than out.
+
+### Other environment variables
+
+| Variable | What it does |
+| --- | --- |
+| `DATABASE_URL` | Postgres connection string. Unset ⇒ a local SQLite file. |
+| `MIVI_DATA_DIR` | Where the SQLite file and the legacy `db.json` are looked for. Default `./data`. |
+| `MIVI_ADMIN_DISCORD_ID` | Your Discord user id. Pins the fallback moderator to *you*. Without it the fallback is by username, which anyone can type — set this on any public server. |
+| `TRUST_PROXY_HOPS` | How many proxies sit in front (default 1). Wrong values make per-IP rate limits misbehave. |
+| `MIVI_ALLOW_MULTI_INSTANCE` | Silences the single-writer warning. Only if you know why. |
+| `MIVI_ACTIVITY=0` | Turns Discord Activity support (and its relaxed framing headers) off. |
 
 ## What's in it
 
@@ -105,11 +168,11 @@ Three things to set on the Railway service:
 - **Room lists** — anything you add to a room can be renamed or removed on the spot; removing the last one falls back to Classic rather than leaving the room with nothing to draw. The host can also grab **every list in the room as a single .zip** ("Download all"), with the ones currently in play first and unused ones prefixed so you can tell them apart.
 - **Scene backdrops** — switch this on as host and whoever's drawing gets a 🖼️ button with 22 ready-made scenes to draw over: city, city at night, beach, forest, mountains, space, desert, underwater, farm, open road, snow, sunset, rain, castle, race track, football pitch, classroom, kitchen, stage, meadow, clouds and a lined page. They're drawn in code (nothing to download), identical for everyone, and the eraser restores the scene rather than smearing over it.
 - **Save the game as a GIF** — at the final scoreboard, one button turns every drawing from that game into an animated GIF, each frame captioned with the word, the artist and the Mivimoose mark. Encoded right in the browser.
-- **Accounts** — pick your display name, unlimited saved lists (import/export), a gallery of your drawings (auto-save optional), stats, friends.
+- **Accounts** — pick your display name, unlimited saved lists (import/export), a gallery of your drawings (auto-save optional), stats, friends. All of it lives on the account rather than in the browser, so signing in on a second device brings it with you — **including your settings**: theme, interface scale, sound, the name and avatar you play under, the lobby setup you last used, and the word lists you built in a room. Play as a guest and they still work; they just stay on that device. Whichever copy was changed most recently wins.
 - **Host controls, mid-game** — the 🎛️ button opens the full settings while a game is running: rounds, clock, hints, word lists, everything. Most of it lands on the next round; shortening the clock trims the current one, and cutting the round count to where you already are ends the game. 🏁 **End game** jumps straight to the final scoreboard.
 - **Moderators** — mods can take down any shared list, ban an account from sharing (which also pulls what it already shared), and hand the badge to someone else. While *nobody* holds the badge, the account named **Silk** has it by default; the first time that account actually uses the powers the badge sticks properly and the fallback switches off.
 - **Avoid repeats** (on by default) — words that were drawn, or even offered as a choice, stay out of the rotation for the room until the host changes lists. Tiny lists never get stuck: when the list runs dry, previously offered words come back first, then drawn ones. The lobby shows how much of the pool is still unused.
-- **Works on phones** — canvas-first layout, a scrolling player strip, chunky touch tools, bottom-sheet modals, and no accidental zoom or long-press menus while drawing.
+- **Works on phones** — a play screen built for a 390px screen rather than squeezed into one: the word on its own line, a 4:3 canvas, 44px drawing tools, the three colour families as three scrollable rows with the custom-colour key pinned beside them, chat as a drawer instead of a third of the screen, and the tools beside the drawing in landscape. Safe-area insets for the notch and the home indicator, the guess box stays above the keyboard, and nothing can end up off the edge or below an unscrollable fold.
 - **Game settings** — every setting has a **?** that explains it. Defaults: 10 rounds, 90s draw time, 5 word choices, 5 hints, 10 players, Easy autocorrect. Modes: combinations (two words at once, with optional lock-in of guessed halves), co-op drawing, hidden mode, text tool (artists can type on the canvas — but not the answer), spam protection.
 - **Autocorrect** — four levels. Off is exact spelling only. Easy forgives one typo on longer words and plurals. Normal allows a typo on most words and two on long ones. Generous accepts pretty much anything close. Swapped letters count as one typo, accents and punctuation are ignored, and on the stricter levels short words still have to start with the right letter.
 - **Quality of life** — a Leave button, host migration (with a 👑 next to whoever's host), reconnect keeps your seat and score, vote-to-skip, ❤️ likes, avatar picker, fullscreen focus mode (`F`), tool hotkeys, chat status pills, smoothed brush strokes, an anti-alias-aware paint bucket, a canvas that sizes itself to your screen, synthesized sound effects and background music, and eight colour themes — Midnight, Ocean, Forest, Sunset, Noir, Daylight, Candy and Parchment. Dark is the default; the 🌙 button in the header cycles through them (or pick one directly in Settings).
@@ -134,13 +197,15 @@ lib/
   api.js             REST: Discord auth, lists, gallery, library, friends, rooms
   auth.js            account records & session tokens
   config.js          config.json / env loading
-  store.js           JSON persistence + drawing files
+  db.js              the database driver — Postgres or SQLite, one interface
+  store.js           the data itself: in-memory, written through to the db
 public/
   index.html         the app
   css/style.css      styling
   js/app.js          game client
   js/account.js      sign-in, account panel, friends
   js/api.js          REST client + identity
+  js/prefs.js        settings that follow the account, not the browser
   js/audio.js        synthesized SFX + generative music
   js/profanity.js    shared swear filter (server uses it too)
 words/classic.txt    the built-in list (add more .txt files here)
